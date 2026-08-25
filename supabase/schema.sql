@@ -9,20 +9,10 @@ DROP TABLE IF EXISTS club_announcements CASCADE;
 DROP TABLE IF EXISTS club_payments CASCADE;
 DROP TABLE IF EXISTS club_students CASCADE;
 DROP TABLE IF EXISTS club_branches CASCADE;
+DROP TABLE IF EXISTS club_coaches CASCADE;
 DROP TABLE IF EXISTS club_applications CASCADE;
 DROP TABLE IF EXISTS clubs CASCADE;
 DROP TABLE IF EXISTS profiles CASCADE;
-
-CREATE TABLE IF NOT EXISTS profiles (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  auth_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL DEFAULT 'super-admin',
-  full_name TEXT NOT NULL DEFAULT 'Süper Admin',
-  email TEXT NOT NULL UNIQUE,
-  phone TEXT,
-  is_active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
 
 CREATE TABLE IF NOT EXISTS clubs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -31,6 +21,24 @@ CREATE TABLE IF NOT EXISTS clubs (
   phone TEXT,
   whatsapp_number TEXT,
   address TEXT,
+  username TEXT,
+  password TEXT,
+  suspended BOOLEAN NOT NULL DEFAULT false,
+  subscription JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  club_id UUID REFERENCES clubs(id) ON DELETE CASCADE,
+  auth_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'super-admin',
+  full_name TEXT NOT NULL DEFAULT 'Süper Admin',
+  username TEXT,
+  password TEXT,
+  email TEXT,
+  phone TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -39,6 +47,18 @@ CREATE TABLE IF NOT EXISTS club_branches (
   club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   monthly_fee NUMERIC(10,2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS club_coaches (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  username TEXT NOT NULL,
+  password TEXT,
+  phone TEXT,
+  branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
+  is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -52,6 +72,9 @@ CREATE TABLE IF NOT EXISTS club_students (
   parent_phone TEXT,
   started_at DATE,
   status TEXT NOT NULL DEFAULT 'active',
+  branch_ids JSONB DEFAULT '[]'::jsonb,
+  branch_status JSONB DEFAULT '{}'::jsonb,
+  attendance JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -87,7 +110,10 @@ CREATE TABLE IF NOT EXISTS club_messages (
   club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
   sender_name TEXT NOT NULL,
   sender_role TEXT NOT NULL,
+  student_id UUID,
+  student_name TEXT,
   message TEXT NOT NULL,
+  read BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -100,8 +126,43 @@ CREATE TABLE IF NOT EXISTS club_applications (
   parent_phone TEXT NOT NULL,
   branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'pending',
+  notes TEXT,
+  files JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE clubs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE club_branches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE club_coaches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE club_students ENABLE ROW LEVEL SECURITY;
+ALTER TABLE club_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE club_announcements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE club_notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE club_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE club_applications ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "clubs_all_access" ON clubs;
+DROP POLICY IF EXISTS "profiles_all_access" ON profiles;
+DROP POLICY IF EXISTS "club_branches_all_access" ON club_branches;
+DROP POLICY IF EXISTS "club_coaches_all_access" ON club_coaches;
+DROP POLICY IF EXISTS "club_students_all_access" ON club_students;
+DROP POLICY IF EXISTS "club_payments_all_access" ON club_payments;
+DROP POLICY IF EXISTS "club_announcements_all_access" ON club_announcements;
+DROP POLICY IF EXISTS "club_notifications_all_access" ON club_notifications;
+DROP POLICY IF EXISTS "club_messages_all_access" ON club_messages;
+DROP POLICY IF EXISTS "club_applications_all_access" ON club_applications;
+
+CREATE POLICY "clubs_all_access" ON clubs FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "profiles_all_access" ON profiles FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "club_branches_all_access" ON club_branches FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "club_coaches_all_access" ON club_coaches FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "club_students_all_access" ON club_students FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "club_payments_all_access" ON club_payments FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "club_announcements_all_access" ON club_announcements FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "club_notifications_all_access" ON club_notifications FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "club_messages_all_access" ON club_messages FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "club_applications_all_access" ON club_applications FOR ALL USING (true) WITH CHECK (true);
 
 COMMIT;
 

@@ -1,26 +1,45 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { supabase } from './lib/supabase';
 
 const packageOptions = [1, 3, 6, 12];
 
-const initialUsers = [
-  {
-    id: 'super-admin',
-    role: 'super-admin',
-    name: 'Süper Admin',
-    email: 'sagliksk@gmail.com',
-    password: 'Efraim+08',
-    clubId: 'platform',
-    isActive: true,
-  },
-];
+const initialUsers = [];
 
 const initialClubs = [];
 
+const LOCKED_SUPER_ADMIN_EMAIL = 'sagliksk@gmail.com';
+const LOCKED_SUPER_ADMIN_PASSWORD = 'Efraim+08';
+
+const lockedSuperAdminUser = {
+  id: 'locked-super-admin',
+  name: 'Süper Admin',
+  email: LOCKED_SUPER_ADMIN_EMAIL,
+  username: LOCKED_SUPER_ADMIN_EMAIL,
+  password: LOCKED_SUPER_ADMIN_PASSWORD,
+  role: 'super-admin',
+  clubId: null,
+  isActive: true,
+};
+
+function isLockedSuperAdminIdentity(inputEmail, inputPassword) {
+  const emailValue = String(inputEmail ?? '').trim().toLowerCase();
+  const passwordValue = String(inputPassword ?? '').trim();
+
+  return emailValue === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase() && passwordValue === LOCKED_SUPER_ADMIN_PASSWORD;
+}
+
+function isLockedSuperAdminUser(user) {
+  if (!user || typeof user !== 'object') return false;
+  const emailValue = String(user.email ?? user.username ?? '').trim().toLowerCase();
+  const passwordValue = String(user.password ?? '').trim();
+
+  return emailValue === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase() && passwordValue === LOCKED_SUPER_ADMIN_PASSWORD;
+}
+
 const defaultForm = {
   studentName: '',
-  studentSurname: '',
   birthDate: '',
-  branchId: 'branch-futbol',
+  branchId: '',
   parentName: '',
   parentPhone: '',
   parentPassword: '',
@@ -28,6 +47,10 @@ const defaultForm = {
   acceptKvkk: false,
   acceptPolicy: false,
 };
+
+function toTurkishUpper(value) {
+  return String(value ?? '').toLocaleUpperCase('tr-TR');
+}
 
 function generatePassword(length = 12) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*';
@@ -43,15 +66,294 @@ function generateUsername(name) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, '')
+    .replace(/[^a-zA-Z0-9]/g, '')
     .toUpperCase();
 }
 
+function normalizeLoginUsername(value) {
+  return generateUsername(value);
+}
+
+function isValidUuid(value) {
+  return typeof value === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(value.trim());
+}
+
+function toDatabaseUuidOrNull(value) {
+  const candidate = String(value ?? '').trim();
+  return isValidUuid(candidate) ? candidate : null;
+}
+
+async function insertIntoSupabase(table, rows, options = {}) {
+  if (!table || !Array.isArray(rows) || !rows.length) return { ok: true, inserted: 0, data: [] };
+  if (!supabase || !supabase.from) {
+    console.warn(`Supabase insert skipped for ${table}: client unavailable.`);
+    return { ok: false, error: new Error('Supabase client unavailable') };
+  }
+
+  const sanitizedRows = rows.map((row) => {
+    const cleanRow = Object.fromEntries(
+      Object.entries(row).filter(([, value]) => value !== undefined)
+    );
+
+    if (cleanRow.id && !isValidUuid(String(cleanRow.id))) {
+      delete cleanRow.id;
+    }
+
+    return cleanRow;
+  });
+
+  const query = supabase.from(table);
+  const dbAction = options.upsert
+    ? query.upsert(sanitizedRows, { onConflict: 'id', ignoreDuplicates: false })
+    : query.insert(sanitizedRows);
+
+  const { data, error } = await dbAction.select();
+  if (error) {
+    console.error(`Supabase insert failed for ${table}:`, error);
+    return { ok: false, error };
+  }
+
+  return { ok: true, inserted: sanitizedRows.length, data: data ?? [] };
+}
+
+async function deleteFromSupabase(table, column, value) {
+  if (!table || !column || value === undefined || value === null || value === '') {
+    return { ok: false, error: new Error('Silme için gerekli filtre eksik.') };
+  }
+
+  if (!supabase || !supabase.from) {
+    console.warn(`Supabase delete skipped for ${table}: client unavailable.`);
+    return { ok: false, error: new Error('Supabase client unavailable') };
+  }
+
+  if (table === 'profiles') {
+    const deleteTarget = String(value ?? '').trim();
+    const protectedValues = [
+      LOCKED_SUPER_ADMIN_EMAIL,
+      lockedSuperAdminUser.username,
+      lockedSuperAdminUser.email,
+    ];
+
+    if (
+      (column === 'email' && protectedValues.includes(deleteTarget.toLowerCase())) ||
+      (column === 'username' && protectedValues.includes(deleteTarget.toLowerCase())) ||
+      (column === 'id' && deleteTarget === lockedSuperAdminUser.id)
+    ) {
+      return { ok: false, error: new Error('Kilitli süper admin hesabı silinemez.') };
+    }
+  }
+
+  const { data, error } = await supabase.from(table).delete().eq(column, value).select();
+  if (error) {
+    console.error(`Supabase delete failed for ${table}:`, error);
+    return { ok: false, error };
+  }
+
+  return { ok: true, deleted: Array.isArray(data) ? data.length : 0, data: data ?? [] };
+}
+
+function normalizeClubRecord(club) {
+  if (!club || typeof club !== 'object') return null;
+
+  const safeSubscription = club.subscription && typeof club.subscription === 'object' ? club.subscription : {};
+
+  return {
+    ...club,
+    id: club.id,
+    name: club.name ?? club.clubName ?? 'Kulüp',
+    managerName: club.manager_name ?? club.managerName ?? '',
+    phone: club.phone ?? '',
+    whatsappNumber: club.whatsapp_number ?? club.whatsappNumber ?? '',
+    address: club.address ?? '',
+    username: club.username ?? '',
+    password: club.password ?? '',
+    suspended: Boolean(club.suspended),
+    subscription: {
+      startDate: safeSubscription.startDate ?? safeSubscription.startedAt ?? '',
+      endDate: safeSubscription.endDate ?? '',
+      packageMonths: Number(safeSubscription.packageMonths ?? safeSubscription.months ?? 0),
+      lastPaymentDate: safeSubscription.lastPaymentDate ?? '',
+      ...safeSubscription,
+    },
+    students: Array.isArray(club.students) ? club.students : [],
+    branches: Array.isArray(club.branches) ? club.branches : [],
+    payments: Array.isArray(club.payments) ? club.payments : [],
+    pendingApplications: Array.isArray(club.pendingApplications) ? club.pendingApplications : [],
+    announcements: Array.isArray(club.announcements) ? club.announcements : [],
+    incomingMessages: Array.isArray(club.incomingMessages) ? club.incomingMessages : [],
+    subscriptionHistory: Array.isArray(club.subscriptionHistory) ? club.subscriptionHistory : [],
+    paymentSchedule: Array.isArray(club.paymentSchedule) ? club.paymentSchedule : [],
+  };
+}
+
+function normalizeApplicationRecord(application) {
+  if (!application || typeof application !== 'object') return null;
+
+  return {
+    ...application,
+    id: application.id,
+    studentName: application.student_name ?? application.studentName ?? '',
+    studentSurname: application.student_surname ?? application.studentSurname ?? '',
+    parentName: application.parent_name ?? application.parentName ?? '',
+    parentPhone: application.parent_phone ?? application.parentPhone ?? '',
+    branchId: application.branch_id ?? application.branchId ?? '',
+    status: application.status ?? 'pending',
+    notes: application.notes ?? '',
+    files: Array.isArray(application.files) ? application.files : [],
+    createdAt: application.created_at ?? application.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function normalizeMessageRecord(message) {
+  if (!message || typeof message !== 'object') return null;
+
+  return {
+    ...message,
+    id: message.id,
+    clubId: message.club_id ?? message.clubId ?? '',
+    senderName: message.sender_name ?? message.senderName ?? 'Kullanıcı',
+    senderRole: message.sender_role ?? message.senderRole ?? 'Veli',
+    studentId: message.student_id ?? message.studentId ?? null,
+    studentName: message.student_name ?? message.studentName ?? '',
+    message: message.message ?? '',
+    read: Boolean(message.read ?? false),
+    sentAt: message.created_at ?? message.sentAt ?? new Date().toISOString(),
+  };
+}
+
+async function fetchAllClubsFromSupabase() {
+  if (!supabase || !supabase.from) {
+    console.warn('Supabase fetch skipped for clubs: client unavailable.');
+    return [];
+  }
+
+  const { data: clubsData, error: clubsError } = await supabase
+    .from('clubs')
+    .select('*')
+    .order('created_at', { ascending: true });
+
+  if (clubsError) {
+    console.error('Supabase clubs fetch failed:', clubsError);
+    return [];
+  }
+
+  const clubIds = (clubsData ?? []).map((club) => club.id).filter(Boolean);
+
+  const [{ data: branchRows, error: branchError }, { data: applicationRows, error: applicationError }, { data: messageRows, error: messageError }] = await Promise.all([
+    clubIds.length
+      ? supabase.from('club_branches').select('*').in('club_id', clubIds)
+      : Promise.resolve({ data: [], error: null }),
+    clubIds.length
+      ? supabase.from('club_applications').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    clubIds.length
+      ? supabase.from('club_messages').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (branchError) {
+    console.error('Supabase club_branches fetch failed:', branchError);
+  }
+
+  if (applicationError) {
+    console.error('Supabase club_applications fetch failed:', applicationError);
+  }
+
+  if (messageError) {
+    console.error('Supabase club_messages fetch failed:', messageError);
+  }
+
+  const branchesByClubId = {};
+  (branchRows ?? []).forEach((branch) => {
+    if (!branch?.club_id) return;
+    const nextList = branchesByClubId[branch.club_id] ?? [];
+    nextList.push({
+      id: branch.id,
+      name: branch.name,
+      fee: Number(branch.monthly_fee ?? 0),
+      monthlyFee: Number(branch.monthly_fee ?? 0),
+      coachIds: Array.isArray(branch.coach_ids) ? branch.coach_ids : [],
+      clubId: branch.club_id,
+      ...branch,
+    });
+    branchesByClubId[branch.club_id] = nextList;
+  });
+
+  const applicationsByClubId = {};
+  (applicationRows ?? []).forEach((application) => {
+    if (!application?.club_id) return;
+    const normalized = normalizeApplicationRecord(application);
+    if (!normalized) return;
+    if (String(normalized.status || '').toLowerCase() !== 'pending') return;
+    const nextList = applicationsByClubId[application.club_id] ?? [];
+    nextList.push(normalized);
+    applicationsByClubId[application.club_id] = nextList;
+  });
+
+  const messagesByClubId = {};
+  (messageRows ?? []).forEach((message) => {
+    if (!message?.club_id) return;
+    const normalized = normalizeMessageRecord(message);
+    if (!normalized) return;
+    const nextList = messagesByClubId[message.club_id] ?? [];
+    nextList.push(normalized);
+    messagesByClubId[message.club_id] = nextList;
+  });
+
+  return (clubsData ?? [])
+    .map((club) => {
+      const normalized = normalizeClubRecord(club);
+      if (!normalized) return null;
+      return {
+        ...normalized,
+        branches: (branchesByClubId[club.id] ?? []).map((branch) => ({
+          ...branch,
+          fee: Number(branch.fee ?? branch.monthly_fee ?? 0),
+          monthlyFee: Number(branch.monthlyFee ?? branch.monthly_fee ?? branch.fee ?? 0),
+          coachIds: Array.isArray(branch.coachIds) ? branch.coachIds : [],
+        })),
+        pendingApplications: applicationsByClubId[club.id] ?? [],
+        incomingMessages: messagesByClubId[club.id] ?? [],
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeDbBranchId(branchId) {
+  return toDatabaseUuidOrNull(branchId);
+}
+
+function normalizeDbClubId(clubId) {
+  return toDatabaseUuidOrNull(clubId);
+}
+
+function normalizeDbStudentId(studentId) {
+  return toDatabaseUuidOrNull(studentId);
+}
+
+function normalizeDbParentEmail(parentName, clubId) {
+  const base = String(parentName || 'veli').trim().toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'veli';
+  const clubSuffix = toDatabaseUuidOrNull(clubId)?.slice(0, 8) || 'club';
+  return `${base}.${clubSuffix}@local.invalid`;
+}
+
+function normalizeDbRecordId(value) {
+  return toDatabaseUuidOrNull(value);
+}
+
 function normalizeWhatsappNumber(value) {
-  const digits = String(value ?? '').replace(/\D/g, '');
+  const sanitized = String(value ?? '')
+    .replace(/\s+/g, '')
+    .replace(/[+()\-]/g, '')
+    .trim();
+
+  const digits = sanitized.replace(/\D/g, '');
   if (!digits) return '';
-  if (digits.startsWith('90')) return digits;
-  if (digits.startsWith('0')) return `9${digits.slice(1)}`;
-  return digits;
+
+  const withoutLeadingZero = digits.startsWith('0') ? digits.slice(1) : digits;
+  const withTurkeyCode = withoutLeadingZero.startsWith('90') ? withoutLeadingZero : `90${withoutLeadingZero}`;
+
+  return withTurkeyCode.replace(/^90\+/, '90').replace(/^\+/, '');
 }
 
 function formatWhatsappDisplay(value) {
@@ -68,20 +370,12 @@ function buildWhatsAppLink(number, text) {
 }
 
 function getPublicBaseUrl() {
-  if (typeof window === 'undefined') return '';
-
-  const runtimeConfiguredBaseUrl =
-    window.__APP_PUBLIC_BASE_URL__ ||
-    (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_PUBLIC_BASE_URL : '') ||
-    window.location.origin;
-
-  return String(runtimeConfiguredBaseUrl || window.location.origin).replace(/\/+$/, '');
+  return 'https://sporkulubutys.vercel.app';
 }
 
 function buildPublicClubLink(clubId) {
-  if (!clubId) return '?club=';
+  if (!clubId) return 'https://sporkulubutys.vercel.app/?club=';
   const publicBaseUrl = getPublicBaseUrl();
-  if (!publicBaseUrl) return `?club=${encodeURIComponent(clubId)}`;
   return `${publicBaseUrl}/?club=${encodeURIComponent(clubId)}`;
 }
 
@@ -155,12 +449,6 @@ function buildAttendanceWarningWhatsAppMessage(studentName, branchName, clubName
   return `Merhaba, ${clubName} kulübünde ${studentName} öğrencisinin ${branchName} branşı için devamsızlık uyarısı bulunmaktadır. Lütfen antrenman takvimi ve yoklama durumu ile ilgili bilgi alalım.`;
 }
 
-function buildAnnouncementWhatsAppMessage(clubName, title, message) {
-  const cleanTitle = title?.trim() || 'Duyuru';
-  const cleanMessage = message?.trim() || 'Kısa bir duyuru bulunmaktadır.';
-  return `Merhaba, ${clubName} kulübünden duyuru: ${cleanTitle}. ${cleanMessage}`;
-}
-
 function getCalendarMonthCells(monthKey) {
   const [year, month] = monthKey.split('-').map(Number);
   const firstDay = new Date(year, month - 1, 1);
@@ -175,14 +463,20 @@ function getCalendarMonthCells(monthKey) {
   return cells;
 }
 
-function AppClean() {
+function AppClean({ initialPublicClubId = null } = {}) {
+  const urlSearchParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const forcedPublicClubId = urlSearchParams.get('club') || initialPublicClubId || null;
+
+  const SESSION_STORAGE_KEY = 'sporthub_session_v1';
+
   const [currentUser, setCurrentUser] = useState(null);
   const [clubs, setClubs] = useState(initialClubs);
   const [users, setUsers] = useState(initialUsers);
   const [activeRole, setActiveRole] = useState('super-admin');
+  const [sessionHydrated, setSessionHydrated] = useState(false);
   const [superAdminTab, setSuperAdminTab] = useState('statistics');
   const [managerTab, setManagerTab] = useState('info');
-  const [selectedClubId, setSelectedClubId] = useState('club-1');
+  const [selectedClubId, setSelectedClubId] = useState('');
   const [newClub, setNewClub] = useState({
     clubName: '',
     managerName: '',
@@ -202,6 +496,9 @@ function AppClean() {
   const [managerSelectedBranchId, setManagerSelectedBranchId] = useState('');
   const [managerSelectedStudentId, setManagerSelectedStudentId] = useState('');
   const [studentBranchAddValue, setStudentBranchAddValue] = useState('');
+  const [clubListSearch, setClubListSearch] = useState('');
+  const [expandedClubId, setExpandedClubId] = useState(null);
+  const [superAdminDetailClubId, setSuperAdminDetailClubId] = useState(null);
   const [coachForm, setCoachForm] = useState({ name: '', phone: '', branchId: 'branch-futbol', username: '', password: '' });
   const [announcementForm, setAnnouncementForm] = useState({ target: 'Tüm Okula', title: 'Antrenman İptali', message: '' });
   const [applicationForm, setApplicationForm] = useState(defaultForm);
@@ -223,25 +520,133 @@ function AppClean() {
   const [showAttendanceSummaryModal, setShowAttendanceSummaryModal] = useState(false);
   const [parentTab, setParentTab] = useState('attendance');
   const [coachTab, setCoachTab] = useState('attendance');
+  const [coachViewClubId, setCoachViewClubId] = useState('');
+  const [coachViewCoachId, setCoachViewCoachId] = useState('');
   const [parentMessageText, setParentMessageText] = useState('');
   const [coachMessageText, setCoachMessageText] = useState('');
   const [toastMessage, setToastMessage] = useState('');
+  const [managerPasswordReset, setManagerPasswordReset] = useState({ open: false, clubId: '', newPassword: '' });
   const [publicFormClubId, setPublicFormClubId] = useState(() => {
+    if (initialPublicClubId) return initialPublicClubId;
     if (typeof window === 'undefined') return null;
-    return new URLSearchParams(window.location.search).get('club');
+    return urlSearchParams.get('club');
   });
+  const [publicClubDetails, setPublicClubDetails] = useState(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      setSessionHydrated(true);
+      return;
+    }
+
+    try {
+      const rawSession = window.localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!rawSession) {
+        setSessionHydrated(true);
+        return;
+      }
+
+      const savedSession = JSON.parse(rawSession);
+      if (savedSession?.currentUser) {
+        setCurrentUser(savedSession.currentUser);
+        setActiveRole(savedSession.activeRole || savedSession.currentUser.role || 'super-admin');
+        if (savedSession.selectedClubId) {
+          setSelectedClubId(savedSession.selectedClubId);
+        }
+      }
+    } catch (error) {
+      console.warn('Session restore failed:', error);
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    } finally {
+      setSessionHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sessionHydrated || typeof window === 'undefined') return;
+
+    if (!currentUser) {
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        currentUser,
+        activeRole,
+        selectedClubId,
+      })
+    );
+  }, [sessionHydrated, currentUser, activeRole, selectedClubId]);
 
   const getClubById = (clubId) => clubs.find((club) => club.id === clubId) ?? null;
+
+  const loadClubs = async () => {
+    const nextClubs = await fetchAllClubsFromSupabase();
+    setClubs(nextClubs);
+
+    const explicitClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
+
+    if (explicitClubId) {
+      setSelectedClubId(explicitClubId);
+      return;
+    }
+
+    if (nextClubs.length) {
+      const firstClubId = nextClubs[0]?.id ?? '';
+      const shouldSelectCurrent = selectedClubId && nextClubs.some((club) => club.id === selectedClubId);
+      setSelectedClubId(shouldSelectCurrent ? selectedClubId : firstClubId);
+    } else {
+      setSelectedClubId('');
+    }
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const runLoadClubs = async () => {
+      const nextClubs = await fetchAllClubsFromSupabase();
+      if (!isMounted) return;
+
+      setClubs(nextClubs);
+
+      const explicitClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
+
+      if (explicitClubId) {
+        setSelectedClubId(explicitClubId);
+        return;
+      }
+
+      if (nextClubs.length) {
+        const firstClubId = nextClubs[0]?.id ?? '';
+        const shouldSelectCurrent = selectedClubId && nextClubs.some((club) => club.id === selectedClubId);
+        setSelectedClubId(shouldSelectCurrent ? selectedClubId : firstClubId);
+      } else {
+        setSelectedClubId('');
+      }
+    };
+
+    runLoadClubs();
+    return () => {
+      isMounted = false;
+    };
+  }, [publicFormClubId, initialPublicClubId]);
 
   useEffect(() => {
     const syncClubFromUrl = () => {
       if (typeof window === 'undefined') return;
       const urlClubId = new URLSearchParams(window.location.search).get('club');
-      const safeClubId = urlClubId && getClubById(urlClubId) ? urlClubId : null;
+      const safeClubId = urlClubId || null;
 
       setPublicFormClubId(safeClubId);
       if (safeClubId) {
         setSelectedClubId(safeClubId);
+        return;
+      }
+
+      if (currentUser && !isSuperAdminRole(currentUser.role) && currentUser.clubId) {
+        setSelectedClubId(currentUser.clubId);
         return;
       }
 
@@ -261,15 +666,168 @@ function AppClean() {
     return () => clearTimeout(timer);
   }, [toastMessage]);
 
+  useEffect(() => {
+    if (!clubs.length) return;
+
+    const initialClubId = currentUser?.clubId || selectedClubId || clubs[0]?.id || '';
+    if (!coachViewClubId && initialClubId) {
+      setCoachViewClubId(initialClubId);
+    }
+  }, [clubs, currentUser, selectedClubId, coachViewClubId]);
+
+  useEffect(() => {
+    if (!coachViewClubId) {
+      setCoachViewCoachId('');
+      return;
+    }
+
+    const eligibleCoaches = users.filter((user) => user.role === 'coach' && user.clubId === coachViewClubId);
+    if (!eligibleCoaches.length) {
+      setCoachViewCoachId('');
+      return;
+    }
+
+    const preferredCoachId = currentUser?.role === 'coach' && currentUser.clubId === coachViewClubId ? currentUser.id : eligibleCoaches[0]?.id;
+    const nextCoachId = eligibleCoaches.some((user) => user.id === coachViewCoachId) ? coachViewCoachId : preferredCoachId;
+    if (nextCoachId) {
+      setCoachViewCoachId(nextCoachId);
+    }
+  }, [coachViewClubId, users, currentUser]);
+
   const resolveClubId = (preferredClubId) => {
-    const candidateList = [preferredClubId, publicFormClubId, selectedClubId, currentUser?.clubId, clubs[0]?.id];
+    const explicitClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
+    if (explicitClubId) {
+      return explicitClubId;
+    }
+
+    const candidateList = [preferredClubId, selectedClubId, currentUser?.clubId, clubs[0]?.id];
     const validId = candidateList.find((candidate) => candidate && getClubById(candidate));
     return validId ?? clubs[0]?.id ?? null;
   };
 
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadPublicClub = async () => {
+      const rawClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
+      if (!rawClubId || !supabase || !supabase.from) {
+        setPublicClubDetails(null);
+        return;
+      }
+
+      const { data: clubData, error: clubError } = await supabase
+        .from('clubs')
+        .select('*')
+        .eq('id', rawClubId)
+        .maybeSingle();
+
+      if (clubError || !clubData) {
+        if (!isCancelled) setPublicClubDetails(null);
+        return;
+      }
+
+      const { data: branchData, error: branchError } = await supabase
+        .from('club_branches')
+        .select('*')
+        .eq('club_id', rawClubId)
+        .order('created_at', { ascending: true });
+
+      if (!isCancelled) {
+        const normalizedClub = normalizeClubRecord(clubData);
+        setPublicClubDetails({
+          ...(normalizedClub ?? { id: rawClubId, name: 'Kulüp', branches: [] }),
+          branches: (branchData ?? []).map((branch) => ({
+            id: branch.id,
+            name: branch.name,
+            fee: Number(branch.monthly_fee ?? 0),
+            monthlyFee: Number(branch.monthly_fee ?? 0),
+            ...branch,
+          })),
+        });
+      }
+
+      if (branchError) {
+        console.warn('club_branches fetch failed during public route init:', branchError);
+      }
+    };
+
+    loadPublicClub();
+    return () => {
+      isCancelled = true;
+    };
+  }, [publicFormClubId, initialPublicClubId]);
+
+  function isSuperAdminRole(role) {
+    if (typeof role === 'string') {
+      const normalizedRole = role.trim().toLowerCase();
+      if (normalizedRole === 'super-admin' || normalizedRole === 'super_admin') return true;
+      if (normalizedRole === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase()) return true;
+      return false;
+    }
+
+    if (role && typeof role === 'object') {
+      return isSuperAdminRole(role.role) || String(role.email ?? role.username ?? '').trim().toLowerCase() === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase();
+    }
+
+    return false;
+  }
+
+  const isManagerRole = currentUser?.role === 'club-manager';
+  const isCoachRole = currentUser?.role === 'coach';
+  const isParentRole = currentUser?.role === 'parent';
+  const clubScopeUserId = currentUser && !isSuperAdminRole(currentUser.role) ? currentUser.clubId : null;
+
   const currentClub = useMemo(
     () => getClubById(resolveClubId(selectedClubId)) ?? clubs[0] ?? null,
     [clubs, selectedClubId, currentUser, publicFormClubId]
+  );
+
+  const requestedPublicClubId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null;
+  const rawPublicRouteClubId = publicFormClubId || requestedPublicClubId || initialPublicClubId || null;
+  const validPublicFormClubId = rawPublicRouteClubId && String(rawPublicRouteClubId).trim() ? String(rawPublicRouteClubId).trim() : null;
+  const isPublicRegistrationRoute = Boolean(validPublicFormClubId);
+  const shouldShowPublicForm = isPublicRegistrationRoute && !currentUser;
+  const formClub = useMemo(() => {
+    if (validPublicFormClubId) {
+      return publicClubDetails || getClubById(validPublicFormClubId) || { id: validPublicFormClubId, name: 'Kulüp', branches: [] };
+    }
+    return publicClubDetails || getClubById(selectedClubId) || currentClub || clubs[0] || null;
+  }, [validPublicFormClubId, publicClubDetails, selectedClubId, currentClub, clubs]);
+
+  useEffect(() => {
+    const genericTitle = 'Spor Kulüpleri ve Okulları Yönetim Sistemi';
+
+    if (isPublicRegistrationRoute) {
+      const clubName = getClubById(validPublicFormClubId)?.name || publicClubDetails?.name || 'Kulüp';
+      document.title = `${clubName} | Online Kayıt Formu`;
+      return;
+    }
+
+    if (!currentUser) {
+      document.title = genericTitle;
+      return;
+    }
+
+    const userRole = currentUser?.role;
+    const clubScopedRole = !isSuperAdminRole(userRole) && currentUser?.clubId;
+    const superAdminClubScopedView = isSuperAdminRole(userRole) && activeRole !== 'super-admin' && selectedClubId;
+
+    if (clubScopedRole || superAdminClubScopedView) {
+      const clubId = clubScopedRole ? currentUser.clubId : selectedClubId;
+      const clubName = getClubById(clubId)?.name || 'Kulüp';
+      document.title = `${clubName} | Spor Kulübü Yönetim`;
+      return;
+    }
+
+    document.title = genericTitle;
+  }, [currentUser, validPublicFormClubId, selectedClubId, clubs, publicClubDetails, isPublicRegistrationRoute, activeRole]);
+
+  const announcementTargets = useMemo(
+    () => [
+      { value: 'Tüm Okula', label: 'Tüm Okula' },
+      ...((currentClub?.branches ?? []).map((branch) => ({ value: branch.name, label: branch.name }))),
+    ],
+    [currentClub?.branches]
   );
 
   useEffect(() => {
@@ -282,6 +840,15 @@ function AppClean() {
 
   const bekleyenler = currentClub?.pendingApplications ?? [];
   const ogrenciler = currentClub?.students ?? [];
+  const filteredClubs = useMemo(() => {
+    const searchTerm = clubListSearch.trim().toLowerCase();
+    if (!searchTerm) return clubs;
+
+    return clubs.filter((club) => {
+      const searchableText = [club.name, club.managerName, club.username, club.phone].filter(Boolean).join(' ').toLowerCase();
+      return searchableText.includes(searchTerm);
+    });
+  }, [clubs, clubListSearch]);
 
   const switchRoleView = (nextRole) => {
     setActiveRole(nextRole);
@@ -292,14 +859,19 @@ function AppClean() {
       return;
     }
 
+    if (nextRole === 'club-manager') {
+      if (currentUser?.clubId) {
+        setSelectedClubId(currentUser.clubId);
+        return;
+      }
+      const nextClubId = clubs[0]?.id ?? '';
+      if (nextClubId) setSelectedClubId(nextClubId);
+      return;
+    }
+
     const nextClubId = currentUser?.clubId ? getClubById(currentUser.clubId)?.id : clubs[0]?.id;
     if (nextClubId) setSelectedClubId(nextClubId);
   };
-
-  const validPublicFormClubId = publicFormClubId && getClubById(publicFormClubId) ? publicFormClubId : null;
-  const formClub = getClubById(validPublicFormClubId || selectedClubId) ?? currentClub ?? clubs[0] ?? null;
-
-  const isSuperAdminRole = (role) => role === 'super-admin' || role === 'super_admin';
 
   const activeDisplayUser = useMemo(() => {
     if (!currentUser) return null;
@@ -317,20 +889,48 @@ function AppClean() {
     return currentUser;
   }, [activeRole, currentUser, selectedClubId, users]);
 
+  const normalizeAuthText = (value) => String(value ?? '').trim().toUpperCase();
+
   const findMatchingUser = (username, password, role = null) => {
     const cleanedUsername = String(username ?? '').trim();
+    const enteredPassword = String(password ?? '').trim();
     const normalizedInput = normalizeWhatsappNumber(cleanedUsername);
+    const canonicalInputUsername = normalizeLoginUsername(cleanedUsername);
+    const normalizedInputText = normalizeAuthText(cleanedUsername);
 
-    return users.find((user) => {
-      if (user.isActive === false) return false;
+    if (isLockedSuperAdminIdentity(cleanedUsername, enteredPassword)) {
+      return { ...lockedSuperAdminUser, role: 'super-admin', isActive: true };
+    }
+
+    const directSupabaseMatch = users.find((user) => {
+      const userRole = user.role;
+      const isSuperAdminAccount = isSuperAdminRole(userRole) || isSuperAdminRole(role);
       const userKey = user.username ?? user.email ?? user.name ?? '';
+      const canonicalUserKey = normalizeLoginUsername(userKey);
       const userPhone = normalizeWhatsappNumber(user.phone ?? '');
-      const matchesRole = role ? user.role === role : true;
-      const matchesUsername = userKey.toUpperCase() === cleanedUsername.toUpperCase();
+      const storedPassword = String(user.password ?? '').trim();
+      const normalizedDbUserKey = normalizeAuthText(userKey);
+      const matchesRole = role ? userRole === role : true;
+      const matchesUsername = canonicalUserKey === canonicalInputUsername || normalizedDbUserKey === normalizedInputText;
       const matchesPhone = userPhone && normalizedInput && userPhone === normalizedInput;
-      const matchesParentCandidate = user.role === 'parent' && (matchesUsername || matchesPhone || normalizeWhatsappNumber(user.username || '') === normalizedInput);
-      return matchesRole && (matchesUsername || matchesPhone || matchesParentCandidate) && String(user.password) === String(password);
+      const matchesParentCandidate = userRole === 'parent' && (matchesUsername || matchesPhone || normalizeLoginUsername(user.username || '') === canonicalInputUsername);
+      const credentialsMatch = (matchesUsername || matchesPhone || matchesParentCandidate) && enteredPassword === storedPassword;
+
+      const girilenKadi = cleanedUsername;
+      const veritabanindakiKadi = userKey;
+      console.log('Giriş denemesi:', girilenKadi, veritabanindakiKadi);
+
+      if (isSuperAdminAccount && credentialsMatch) return true;
+      return matchesRole && credentialsMatch;
     });
+
+    if (directSupabaseMatch) return directSupabaseMatch;
+
+    if (cleanedUsername.toLowerCase() === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase() && enteredPassword === LOCKED_SUPER_ADMIN_PASSWORD) {
+      return { ...lockedSuperAdminUser, role: 'super-admin', isActive: true };
+    }
+
+    return undefined;
   };
 
   const login = (role, username, password) => {
@@ -341,14 +941,72 @@ function AppClean() {
       return;
     }
 
+    const isSuperAdminLogin = isSuperAdminRole(match.role) || isSuperAdminRole(role);
+    if (isSuperAdminLogin) {
+      setCurrentUser(match);
+      setActiveRole(match.role || 'super-admin');
+      setSelectedClubId(clubs[0]?.id ?? '');
+      return;
+    }
+
     setCurrentUser(match);
     setActiveRole(match.role);
     const nextClubId = match.clubId || clubs[0]?.id;
     if (nextClubId) setSelectedClubId(nextClubId);
   };
 
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setActiveRole('super-admin');
+    setSelectedClubId('');
+    setPublicFormClubId(null);
+    setPublicClubDetails(null);
+    document.title = 'Spor Kulüpleri ve Okulları Yönetim Sistemi';
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete('club');
+      window.history.replaceState({}, '', nextUrl);
+    }
+  };
+
   const handleToggleClubStatus = (clubId) => {
     setClubs((prev) => prev.map((club) => (club.id === clubId ? { ...club, suspended: !club.suspended } : club)));
+  };
+
+  const handleDeleteClub = async (clubId) => {
+    if (!clubId) return;
+    const clubToDelete = getClubById(clubId);
+    const confirmed = window.confirm(`${clubToDelete?.name || 'Bu kulüp'} silinecek. Tüm kulüp verileri, şubeler, öğrenciler, veliler, duyurular ve kayıtlar da silinecektir. Devam etmek istiyor musunuz?`);
+    if (!confirmed) return;
+
+    try {
+      const { error } = await supabase.from('clubs').delete().eq('id', clubId);
+      if (error) {
+        console.error('Supabase club delete failed:', error);
+        alert('Kulüp silinemedi. Veritabanı kısıtları veya ilişkiler kontrol edilmelidir.');
+        return;
+      }
+
+      setClubs((prev) => prev.filter((club) => club.id !== clubId));
+      setExpandedClubId((prev) => (prev === clubId ? null : prev));
+      setSuperAdminDetailClubId((prev) => (prev === clubId ? null : prev));
+
+      if (publicFormClubId === clubId) {
+        setPublicFormClubId(null);
+      }
+
+      if (selectedClubId === clubId) {
+        const nextClubId = clubs.find((club) => club.id !== clubId)?.id ?? '';
+        setSelectedClubId(nextClubId);
+      }
+
+      setToastMessage('Kulüp ve tüm ilişkili veriler silindi.');
+    } catch (error) {
+      console.error('Unexpected delete club error:', error);
+      alert('Kulüp silinirken beklenmeyen bir hata oluştu.');
+    }
   };
 
   const handleExtendSubscription = (clubId, months, amount) => {
@@ -380,7 +1038,7 @@ function AppClean() {
     );
   };
 
-  const handleSuperAdminCreateClub = () => {
+  const handleSuperAdminCreateClub = async () => {
     if (!newClub.clubName || !newClub.managerName || !newClub.username || !newClub.password) {
       alert('Kulüp adı, yönetici, kullanıcı adı ve şifre zorunludur.');
       return;
@@ -414,7 +1072,18 @@ function AppClean() {
       notifications: [],
     };
 
-    setClubs((prev) => [clubObj, ...prev]);
+    const clubInsertResult = await persistClubToSupabase(clubObj);
+    if (!clubInsertResult.ok) {
+      console.error('Supabase club insert failed.', clubInsertResult.error);
+      alert('Kulüp veritabanına kaydedilemedi.');
+      return;
+    }
+
+    const insertedClub = (clubInsertResult.data && clubInsertResult.data[0]) || clubObj;
+    const savedClubId = normalizeDbClubId(insertedClub?.id) || normalizeDbClubId(clubObj.id) || clubId;
+    const finalClubObj = { ...clubObj, id: savedClubId };
+
+    setClubs((prev) => [finalClubObj, ...prev]);
     setUsers((prev) => [
       ...prev,
       {
@@ -423,10 +1092,21 @@ function AppClean() {
         name: newClub.managerName,
         username: newClub.username,
         password: newClub.password,
-        clubId,
+        clubId: savedClubId,
         isActive: true,
       },
     ]);
+
+    await persistProfileToSupabase({
+      id: `manager-${Date.now()}`,
+      clubId: savedClubId,
+      role: 'club-manager',
+      fullName: newClub.managerName,
+      username: newClub.username,
+      password: newClub.password,
+      phone: newClub.contact,
+      isActive: true,
+    });
     setNewClub({
       clubName: '',
       managerName: '',
@@ -442,18 +1122,53 @@ function AppClean() {
     alert('Kulüp başarıyla oluşturuldu.');
   };
 
-  const handleAddBranch = () => {
+  const handleAddBranch = async () => {
     if (!branchForm.name.trim()) return;
     const newBranch = {
-      id: `branch-${Date.now()}`,
       name: branchForm.name.trim(),
       fee: Number(branchForm.fee || 0),
       monthlyFee: Number(branchForm.fee || 0),
       coachIds: [],
+      clubId: selectedClubId,
     };
 
-    setClubs((prev) => prev.map((club) => (club.id === selectedClubId ? { ...club, branches: [...club.branches, newBranch] } : club)));
+    const branchInsertResult = await persistBranchToSupabase(newBranch);
+    if (!branchInsertResult.ok) {
+      console.error('Supabase branch insert failed.', branchInsertResult.error);
+      alert('Branş veritabanına kaydedilemedi.');
+      return;
+    }
+
+    const insertedBranch = (branchInsertResult.data && branchInsertResult.data[0]) || {
+      ...newBranch,
+      id: `branch-${Date.now()}`,
+      fee: Number(newBranch.fee || 0),
+      monthlyFee: Number(newBranch.monthlyFee || 0),
+      coachIds: [],
+      clubId: selectedClubId,
+    };
+
+    setClubs((prev) => prev.map((club) => (club.id === selectedClubId ? { ...club, branches: [...(club.branches ?? []), { ...insertedBranch, fee: Number(insertedBranch.fee ?? insertedBranch.monthly_fee ?? 0), monthlyFee: Number(insertedBranch.monthlyFee ?? insertedBranch.monthly_fee ?? insertedBranch.fee ?? 0) }] } : club)));
     setBranchForm({ name: '', fee: '' });
+    setToastMessage('Branş başarıyla eklendi.');
+  };
+
+  const handleDeleteBranch = async (branchId) => {
+    if (!branchId) return;
+    const confirmed = window.confirm('Bu branşı silmek istediğinize emin misiniz?');
+    if (!confirmed) return;
+
+    const deleteResult = await deleteFromSupabase('club_branches', 'id', branchId);
+    if (!deleteResult.ok) {
+      console.error('Supabase branch delete failed.', deleteResult.error);
+      alert('Branş veritabanından silinemedi.');
+      return;
+    }
+
+    setClubs((prev) => prev.map((club) => (
+      club.id === selectedClubId ? { ...club, branches: (club.branches ?? []).filter((branch) => branch.id !== branchId) } : club
+    )));
+    setToastMessage('Branş silindi.');
   };
 
   const handleUpdateBranchFee = (branchId, value) => {
@@ -491,7 +1206,7 @@ function AppClean() {
     handleUpdateBranchFee(branchId, numericValue);
   };
 
-  const handleAddCoach = () => {
+  const handleAddCoach = async () => {
     if (!coachForm.name.trim() || !coachForm.password.trim()) {
       alert('Antrenör adı ve şifre zorunludur.');
       return;
@@ -509,6 +1224,32 @@ function AppClean() {
       branchId: coachForm.branchId,
       isActive: true,
     };
+
+    const coachInsertResult = await persistCoachToSupabase({
+      id,
+      clubId: selectedClubId,
+      name: coachForm.name,
+      username,
+      password: coachForm.password,
+      phone: coachForm.phone,
+      branchId: coachForm.branchId,
+    });
+    if (!coachInsertResult.ok) {
+      console.error('Supabase coach insert failed.', coachInsertResult.error);
+      alert('Antrenör veritabanına kaydedilemedi.');
+      return;
+    }
+
+    await persistProfileToSupabase({
+      id,
+      clubId: selectedClubId,
+      role: 'coach',
+      fullName: coachForm.name,
+      username,
+      password: coachForm.password,
+      phone: coachForm.phone,
+      isActive: true,
+    });
 
     setUsers((prev) => [...prev, coachUser]);
     setClubs((prev) =>
@@ -528,7 +1269,7 @@ function AppClean() {
     alert('Antrenör kaydedildi.');
   };
 
-  const handleApproveApplication = (application) => {
+  const handleApproveApplication = async (application) => {
     if (!application) {
       console.log('handleApproveApplication: application boş geldi.');
       return;
@@ -540,10 +1281,62 @@ function AppClean() {
       return;
     }
 
-    setSelectedClubId(resolvedClubId);
-
     const appId = String(application.id ?? '');
-    console.log('Onay butonuna tıklandı:', application.id, 'resolvedClubId:', resolvedClubId);
+    const parentUsername = generateUsername(application.parentName || application.username || '') || String(application.username || '').trim() || normalizeWhatsappNumber(application.parentPhone) || `VELI-${Date.now()}`;
+    const parentPassword = String(application.parentPassword ?? '').trim();
+    const normalizedPhone = normalizeWhatsappNumber(application.parentPhone);
+
+    if (!parentPassword) {
+      console.error('handleApproveApplication: parent password missing.', application);
+      alert('Veli şifresi eksik. Kayıt formunda girilen şifre kullanılmalıdır.');
+      return;
+    }
+
+    const insertStudentResult = await persistStudentToSupabase({
+      clubId: resolvedClubId,
+      name: application.studentName,
+      parentName: application.parentName,
+      parentPhone: application.parentPhone,
+      branchId: application.branchId,
+      birthDate: application.birthDate || '',
+      startedAt: new Date().toISOString().slice(0, 10),
+      status: 'active',
+    });
+
+    if (!insertStudentResult.ok) {
+      console.error('Supabase student insert failed.', insertStudentResult.error);
+      alert('Öğrenci kaydı veritabanına gönderilemedi.');
+      return;
+    }
+
+    const insertParentResult = await persistParentToSupabase({
+      clubId: resolvedClubId,
+      name: application.parentName,
+      phone: application.parentPhone,
+      username: parentUsername,
+      password: parentPassword,
+    });
+
+    if (!insertParentResult.ok) {
+      console.warn('Parent profile insert failed; continuing locally.', insertParentResult.error);
+    }
+
+    const approveResult = await updateApplicationStatusInSupabase({
+      id: appId,
+      clubId: resolvedClubId,
+      studentName: application.studentName,
+      parentName: application.parentName,
+      parentPhone: application.parentPhone,
+      status: 'approved',
+    });
+    if (!approveResult.ok) {
+      console.error('Supabase application approval failed.', approveResult.error);
+      alert('Başvurunun onay durumu veritabanında kaydedilemedi.');
+      return;
+    }
+
+    await loadClubs();
+    setSelectedClubId(resolvedClubId);
 
     const club = clubs.find((item) => item.id === resolvedClubId);
     if (!club) {
@@ -556,9 +1349,6 @@ function AppClean() {
     const branchFee = Number(selectedBranch?.monthlyFee ?? selectedBranch?.fee ?? 0);
     const monthLabel = new Date().toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase());
     const dueDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5);
-    const parentUsername = application.username || generateUsername(application.parentName) || normalizeWhatsappNumber(application.parentPhone) || `VELI-${Date.now()}`;
-    const parentPassword = application.parentPassword || 'veli123';
-    const normalizedPhone = normalizeWhatsappNumber(application.parentPhone);
 
     const newStudent = {
       id: generatedStudentId,
@@ -572,25 +1362,12 @@ function AppClean() {
       attendance: [],
     };
 
-    console.log('handleApproveApplication start', {
-      appId,
-      resolvedClubId,
-      pendingBefore: (club.pendingApplications ?? []).map((item) => String(item.id)),
-      studentsBefore: (club.students ?? []).map((item) => String(item.id)),
-    });
-
     setClubs((prev) =>
       prev.map((item) => {
-        if (item.id !== selectedClubId) return item;
+        if (item.id !== resolvedClubId) return item;
 
         const nextPendingApplications = (item.pendingApplications ?? []).filter((app) => String(app.id) !== appId);
         const nextStudents = [...(item.students ?? []), newStudent];
-
-        console.log('clubs set state:', {
-          clubId: resolvedClubId,
-          remainingPendingIds: nextPendingApplications.map((app) => String(app.id)),
-          nextStudentIds: nextStudents.map((student) => String(student.id)),
-        });
 
         return {
           ...item,
@@ -664,7 +1441,6 @@ function AppClean() {
     });
 
     setToastMessage('Başvuru onaylandı ve öğrenci aktif hale getirildi.');
-    console.log('handleApproveApplication complete', { appId, generatedStudentId });
   };
 
   const handleAssignStudentToBranch = (studentId, branchId) => {
@@ -763,6 +1539,58 @@ function AppClean() {
     alert('Şifre güncellendi.');
   };
 
+  const handleResetClubManagerPassword = async (clubId, nextPassword) => {
+    const safePassword = String(nextPassword ?? '').trim();
+    if (!clubId || !safePassword) {
+      setToastMessage('Şifre boş olamaz.');
+      return;
+    }
+
+    const club = clubs.find((item) => item.id === clubId);
+    if (!club) {
+      setToastMessage('Kulüp bulunamadı.');
+      return;
+    }
+
+    const managerUser = users.find((user) => user.role === 'club-manager' && user.clubId === clubId) ?? null;
+
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ password: safePassword })
+        .eq('club_id', clubId)
+        .eq('role', 'club-manager');
+
+      if (error) {
+        console.error('Supabase club-manager password reset failed:', error);
+        setToastMessage('Şifre güncellenemedi.');
+        return;
+      }
+
+      setUsers((prev) =>
+        prev.map((user) =>
+          user.role === 'club-manager' && user.clubId === clubId ? { ...user, password: safePassword } : user
+        )
+      );
+
+      setClubs((prev) =>
+        prev.map((item) =>
+          item.id === clubId ? { ...item, password: safePassword, managerPassword: safePassword } : item
+        )
+      );
+
+      if (managerUser && currentUser && managerUser.id === currentUser.id) {
+        setCurrentUser((prev) => (prev ? { ...prev, password: safePassword } : prev));
+      }
+
+      setManagerPasswordReset({ open: false, clubId: '', newPassword: '' });
+      setToastMessage(`${club.name} kulübü yöneticisi şifresi güncellendi.`);
+    } catch (error) {
+      console.error('Club manager password reset crashed:', error);
+      setToastMessage('Şifre güncellemesi sırasında hata oluştu.');
+    }
+  };
+
   const handlePaymentStatusChange = (studentId, branchId, nextStatus) => {
     setClubs((prev) =>
       prev.map((club) => {
@@ -806,27 +1634,65 @@ function AppClean() {
     setToastMessage(nextStatus === 'Ödendi' ? 'Ödeme durumu ödendi olarak güncellendi.' : 'Ödeme durumu güncellendi.');
   };
 
-  const handleSendAnnouncement = () => {
-    const payload = {
-      id: `ann-${Date.now()}`,
-      title: announcementForm.title,
-      message: announcementForm.message,
-      target: announcementForm.target,
-      type: 'notice',
-    };
-    setClubs((prev) => prev.map((club) => (club.id === selectedClubId ? { ...club, announcements: [payload, ...(club.announcements || [])] } : club)));
-    alert('Duyuru kaydedildi.');
-  };
+  const handleSendAnnouncement = async () => {
+    const cleanTitle = String(announcementForm.title || '').trim();
+    const cleanMessage = String(announcementForm.message || '').trim();
 
-  const handleWhatsAppAnnouncementSend = () => {
-    const clubName = currentClub?.name || 'Kulübümüz';
-    const message = buildAnnouncementWhatsAppMessage(clubName, announcementForm.title, announcementForm.message);
-    const targetPhone = currentClub?.whatsappNumber || '';
-    if (!targetPhone) {
-      alert('Kulüp WhatsApp numarası tanımlı değil.');
+    if (!cleanTitle || !cleanMessage) {
+      alert('Duyuru başlığı ve mesajı zorunludur.');
       return;
     }
-    window.open(buildWhatsAppLink(targetPhone, message), '_blank', 'noopener,noreferrer');
+
+    const clubId = normalizeDbClubId(selectedClubId || currentClub?.id || currentUser?.clubId || '');
+    if (!clubId) {
+      alert('Kulüp kimliği bulunamadı. Duyuru kaydedilemedi.');
+      return;
+    }
+
+    const notificationText = `${cleanTitle}: ${cleanMessage}`;
+    const localNotification = {
+      id: `notif-${Date.now()}`,
+      type: 'system-announcement',
+      studentId: null,
+      parentPhone: '',
+      text: notificationText,
+      createdAt: new Date().toISOString(),
+      read: false,
+      target: announcementForm.target,
+    };
+
+    const payload = {
+      club_id: clubId,
+      user_id: null,
+      text: notificationText,
+      created_at: new Date().toISOString(),
+    };
+
+    const { error } = await insertIntoSupabase('club_notifications', [payload]);
+    if (error) {
+      console.error('Supabase club_notifications insert failed:', error);
+      alert('Duyuru uygulama içi bildirim olarak kaydedilemedi.');
+      return;
+    }
+
+    setClubs((prev) => prev.map((club) =>
+      club.id === (selectedClubId || currentClub?.id)
+        ? {
+            ...club,
+            announcements: [{
+              id: `ann-${Date.now()}`,
+              title: cleanTitle,
+              message: cleanMessage,
+              target: announcementForm.target,
+              type: 'notice',
+              createdAt: new Date().toISOString(),
+            }, ...(club.announcements || [])],
+            notifications: [localNotification, ...(club.notifications || [])],
+          }
+        : club
+    ));
+
+    setToastMessage('Duyuru uygulama içi bildirim olarak kaydedildi.');
   };
 
   const sendPaymentReminderNotification = (student, amount, branchName) => {
@@ -861,33 +1727,135 @@ function AppClean() {
     setToastMessage('Veliye uygulama içi ödeme hatırlatması gönderildi.');
   };
 
-  const sendManagerMessage = (senderName, senderRole, content) => {
+  const sendManagerMessage = async (senderName, senderRole, content, studentContext = {}) => {
     const cleanText = String(content || '').trim();
     if (!cleanText) {
       alert('Mesaj içeriği boş olamaz.');
       return;
     }
 
-    const messagePayload = {
-      id: `msg-${Date.now()}`,
-      senderName,
-      senderRole,
+    const safeClubId = normalizeDbClubId(selectedClubId) || normalizeDbClubId(currentClub?.id) || normalizeDbClubId(currentUser?.clubId);
+    if (!safeClubId) {
+      alert('Kulüp kimliği bulunamadı. Mesaj kaydedilemedi.');
+      return;
+    }
+
+    const basePayload = {
+      club_id: safeClubId,
+      sender_name: String(senderName || 'Kullanıcı').trim() || 'Kullanıcı',
+      sender_role: String(senderRole || 'Veli').trim() || 'Veli',
       message: cleanText,
-      sentAt: new Date().toISOString(),
+      read: false,
     };
+
+    const studentId = normalizeDbStudentId(studentContext.studentId);
+    const studentName = String(studentContext.studentName || '').trim();
+
+    const payload = {
+      ...basePayload,
+      ...(studentId ? { student_id: studentId } : {}),
+      ...(studentName ? { student_name: studentName } : {}),
+    };
+
+    const payloadWithoutOptionalFields = {
+      club_id: basePayload.club_id,
+      sender_name: basePayload.sender_name,
+      sender_role: basePayload.sender_role,
+      message: basePayload.message,
+      read: false,
+    };
+
+    const attemptInsert = async (record) => {
+      const cleanedRecord = Object.fromEntries(
+        Object.entries(record).filter(([, value]) => value !== undefined && value !== null && value !== '')
+      );
+      return insertIntoSupabase('club_messages', [cleanedRecord]);
+    };
+
+    let result = await attemptInsert(payload);
+    if (!result.ok || result.error) {
+      const fallbackMessage = 'Mesaj veritabanına kaydedilemedi.';
+      console.warn('Primary club_messages insert failed, retrying with minimal payload:', result.error || 'Unknown error');
+      result = await attemptInsert(payloadWithoutOptionalFields);
+      if (!result.ok || result.error) {
+        console.error('Supabase club_messages insert failed:', result.error || 'Unknown error');
+        alert(fallbackMessage);
+        return;
+      }
+    }
+
+    const insertedRecord = (result.data ?? [])[0] ?? { ...basePayload, ...(studentId ? { student_id: studentId } : {}), ...(studentName ? { student_name: studentName } : {}), created_at: new Date().toISOString() };
+    const normalizedMessage = normalizeMessageRecord(insertedRecord);
 
     setClubs((prev) =>
       prev.map((club) =>
-        club.id === selectedClubId
+        club.id === selectedClubId || club.id === currentClub?.id || club.id === currentUser?.clubId
           ? {
               ...club,
-              incomingMessages: [messagePayload, ...(club.incomingMessages || [])],
+              incomingMessages: [normalizedMessage ?? {
+                id: `msg-${Date.now()}`,
+                senderName: basePayload.sender_name,
+                senderRole: basePayload.sender_role,
+                studentName: studentName || '',
+                studentId: studentId || null,
+                message: cleanText,
+                read: false,
+                sentAt: new Date().toISOString(),
+              }, ...(club.incomingMessages || [])],
             }
           : club
       )
     );
 
     setToastMessage('Mesajınız başarıyla gönderildi');
+    await loadClubs();
+  };
+
+  const markMessageAsRead = async (messageId) => {
+    if (!messageId) return;
+
+    const { data, error } = await supabase
+      .from('club_messages')
+      .update({ read: true })
+      .eq('id', messageId)
+      .select();
+
+    if (error) {
+      console.error('Supabase message read status update failed:', error);
+      alert('Mesaj okundu olarak işaretlenemedi.');
+      return;
+    }
+
+    setClubs((prev) =>
+      prev.map((club) => ({
+        ...club,
+        incomingMessages: (club.incomingMessages || []).map((message) =>
+          message.id === messageId ? { ...message, read: true } : message
+        ),
+      }))
+    );
+
+    setToastMessage('Mesaj okundu olarak işaretlendi.');
+  };
+
+  const deleteMessage = async (messageId) => {
+    if (!messageId) return;
+
+    const { error } = await supabase.from('club_messages').delete().eq('id', messageId);
+    if (error) {
+      console.error('Supabase message delete failed:', error);
+      alert('Mesaj silinemedi.');
+      return;
+    }
+
+    setClubs((prev) =>
+      prev.map((club) => ({
+        ...club,
+        incomingMessages: (club.incomingMessages || []).filter((message) => message.id !== messageId),
+      }))
+    );
+
+    setToastMessage('Mesaj silindi.');
   };
 
   const renderSuperAdminPanel = () => (
@@ -929,97 +1897,259 @@ function AppClean() {
       )}
 
       {superAdminTab === 'clubs' && (
-        <div className="card-surface rounded-3xl p-6">
-          <h3 className="mb-4 text-xl font-semibold text-white">Kulüp Listesi ve Abonelik Takip</h3>
-          <div className="grid gap-4 xl:grid-cols-2">
-            {clubs.map((club) => (
-              <div key={club.id} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div>
-                    <h4 className="text-lg font-semibold text-white">{club.name}</h4>
-                    <p className="text-xs text-slate-400">{club.managerName}</p>
-                  </div>
-                  <span className={`status-pill ${club.suspended ? 'bg-red-500/15 text-red-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
-                    {club.suspended ? 'Askıda' : 'Aktif'}
-                  </span>
-                </div>
+        <>
+          <div className="card-surface rounded-3xl p-6">
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <h3 className="text-xl font-semibold text-white">Tüm Kulüpler ve Veliler / Öğrenciler</h3>
+              <div className="max-w-md flex-1">
+                <input
+                  className="input-shell w-full"
+                  placeholder="Kulüp ara..."
+                  value={clubListSearch}
+                  onChange={(e) => setClubListSearch(e.target.value)}
+                />
+              </div>
+            </div>
 
-                <div className="grid gap-2 text-sm text-slate-300">
-                  <div className="flex justify-between gap-2"><span>Program Başlangıcı</span><strong>{formatShortDate(club.subscription.startDate)}</strong></div>
-                  <div className="flex justify-between gap-2"><span>Son Ödeme</span><strong>{formatShortDate(club.subscription.lastPaymentDate)}</strong></div>
-                  <div className="flex justify-between gap-2"><span>Abonelik Paketi</span><strong>{club.subscription.packageMonths} Aylık</strong></div>
-                  <div className="flex justify-between gap-2"><span>Abonelik Ücreti</span><strong>{Number(club.subscription.packageMonths || 0).toLocaleString('tr-TR')} ₺</strong></div>
-                  <div className="flex justify-between gap-2"><span>Bitiş Tarihi</span><strong>{formatShortDate(club.subscription.endDate)}</strong></div>
-                </div>
+            <div className="mb-4 flex flex-wrap gap-2 text-xs text-slate-300">
+              <span className="rounded-full border border-slate-700 bg-slate-900/80 px-3 py-1">Toplam kulüp: {clubs.length}</span>
+              <span className="rounded-full border border-slate-700 bg-slate-900/80 px-3 py-1">Toplam öğrenci: {clubs.reduce((total, club) => total + (club.students ?? []).length, 0)}</span>
+              <span className="rounded-full border border-slate-700 bg-slate-900/80 px-3 py-1">Toplam veli: {clubs.reduce((total, club) => total + new Set((club.students ?? []).map((student) => `${student.parentName || ''}|${normalizeWhatsappNumber(student.parentPhone || '')}`).filter(Boolean)).size, 0)}</span>
+            </div>
 
-                {(() => {
+            <div className="space-y-3">
+              {filteredClubs.length ? (
+                filteredClubs.map((club) => {
+                  const isExpanded = expandedClubId === club.id;
                   const warning = getSubscriptionWarning(club);
-                  const remainingDays = Math.ceil((new Date(club.subscription.endDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-                  const toneClass =
-                    warning.tone === 'red'
-                      ? 'border-red-500/40 bg-red-500/10 text-red-200'
-                      : warning.tone === 'yellow'
-                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-                        : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
+                  const remainingDays = Number.isFinite(new Date(club.subscription.endDate).getTime())
+                    ? Math.ceil((new Date(club.subscription.endDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                    : 0;
+                  const uniqueParents = Array.from(
+                    new Map(
+                      ((club.students ?? [])
+                        .filter((student) => student.parentName || student.parentPhone)
+                        .map((student) => {
+                          const parentKey = `${String(student.parentName || '').trim()}|${normalizeWhatsappNumber(student.parentPhone || '')}`;
+                          return [parentKey, {
+                            name: student.parentName || 'Veli',
+                            phone: student.parentPhone || '',
+                            students: [student],
+                          }];
+                        }))
+                    ).values()
+                  );
 
                   return (
-                    <div className={`mt-3 rounded-xl border px-3 py-2 text-xs font-medium ${toneClass}`}>
-                      Abonelik Durumu: {warning.label} • {remainingDays > 0 ? `${remainingDays} gün kaldı` : 'Süre doldu'}
+                    <div key={club.id} className="rounded-2xl border border-slate-700 bg-slate-900/80">
+                      <button
+                        type="button"
+                        className="flex w-full flex-col gap-2 px-4 py-3 text-left md:flex-row md:items-center md:justify-between"
+                        onClick={() => setExpandedClubId(isExpanded ? null : club.id)}
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold text-white">{club.name}</div>
+                          <div className="text-xs text-slate-400">{club.managerName || 'Yönetici bilgisi yok'} • {club.students?.length ?? 0} öğrenci</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`status-pill ${club.suspended ? 'bg-red-500/15 text-red-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                            {club.suspended ? 'Askıda' : 'Aktif'}
+                          </span>
+                          <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-1 text-[11px] text-slate-300">{club.subscription.packageMonths || 0} ay</span>
+                          <span className="text-sm text-violet-300">{isExpanded ? 'Kapat' : 'Ayrıntılar'}</span>
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-slate-700 bg-slate-950/60 p-4">
+                          <div className="grid gap-4 lg:grid-cols-[1.2fr_1.5fr]">
+                            <div className="space-y-2 text-sm text-slate-300">
+                              <div className="flex items-center justify-between gap-2"><span>Yönetici</span><strong className="text-white">{club.managerName || '—'}</strong></div>
+                              <div className="flex items-center justify-between gap-2"><span>İletişim</span><strong className="text-white">{club.phone || '—'}</strong></div>
+                              <div className="flex items-center justify-between gap-2"><span>WhatsApp</span><strong className="text-white">{club.whatsappNumber ? formatWhatsappDisplay(club.whatsappNumber) : '—'}</strong></div>
+                              <div className="flex items-center justify-between gap-2"><span>Abonelik</span><strong className="text-white">{club.subscription.packageMonths || 0} ay</strong></div>
+                              <div className="flex items-center justify-between gap-2"><span>Bitiş</span><strong className="text-white">{formatShortDate(club.subscription.endDate)}</strong></div>
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className={`rounded-xl border px-3 py-2 text-xs font-medium ${warning.tone === 'red' ? 'border-red-500/40 bg-red-500/10 text-red-200' : warning.tone === 'yellow' ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'}`}>
+                                Abonelik Durumu: {warning.label} • {remainingDays > 0 ? `${remainingDays} gün kaldı` : 'Süre doldu'}
+                              </div>
+
+                              <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                                <select
+                                  className="input-shell"
+                                  value={subscriptionExtensionValues[club.id]?.months ?? club.subscription?.packageMonths ?? 12}
+                                  onChange={(e) =>
+                                    setSubscriptionExtensionValues((prev) => ({
+                                      ...prev,
+                                      [club.id]: { ...(prev[club.id] ?? {}), months: Number(e.target.value) },
+                                    }))
+                                  }
+                                >
+                                  {packageOptions.map((option) => (
+                                    <option key={option} value={option}>{option} Ay</option>
+                                  ))}
+                                </select>
+                                <input
+                                  className="input-shell w-32"
+                                  type="number"
+                                  min="0"
+                                  placeholder="Ücret"
+                                  value={subscriptionExtensionValues[club.id]?.amount ?? 0}
+                                  onChange={(e) =>
+                                    setSubscriptionExtensionValues((prev) => ({
+                                      ...prev,
+                                      [club.id]: { ...(prev[club.id] ?? {}), amount: Number(e.target.value) },
+                                    }))
+                                  }
+                                />
+                                <button
+                                  className="primary-btn"
+                                  onClick={() => handleExtendSubscription(club.id, subscriptionExtensionValues[club.id]?.months ?? club.subscription?.packageMonths ?? 12, subscriptionExtensionValues[club.id]?.amount ?? 0)}
+                                >
+                                  Aboneliği Uzat
+                                </button>
+                              </div>
+
+                              <div className="flex flex-wrap gap-2">
+                                <button className="primary-btn" onClick={() => handleToggleClubStatus(club.id)}>
+                                  {club.suspended ? 'Hesabı Aktive Et' : 'Hesabı Askıya Al'}
+                                </button>
+                                <button
+                                  className="secondary-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSuperAdminDetailClubId(club.id);
+                                  }}
+                                >
+                                  Veliler / Öğrenciler
+                                </button>
+                                <button
+                                  className="secondary-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setManagerPasswordReset({ open: true, clubId: club.id, newPassword: '' });
+                                  }}
+                                >
+                                  Şifre Yenile
+                                </button>
+                                <button
+                                  className="bg-red-600/20 border border-red-500/40 text-red-200 px-3 py-2 rounded-xl text-sm font-semibold hover:bg-red-600/30"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteClub(club.id);
+                                  }}
+                                >
+                                  Kulübü Sil
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
-                })()}
+                })
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400">Arama kriterlerine uygun kulüp bulunamadı.</div>
+              )}
+            </div>
+          </div>
 
-                <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div className="flex flex-col gap-2 md:flex-row md:items-center">
-                    <select
-                      className="input-shell"
-                      value={subscriptionExtensionValues[club.id]?.months ?? club.subscription?.packageMonths ?? 12}
-                      onChange={(e) =>
-                        setSubscriptionExtensionValues((prev) => ({
-                          ...prev,
-                          [club.id]: { ...(prev[club.id] ?? {}), months: Number(e.target.value) },
-                        }))
-                      }
-                    >
-                      {packageOptions.map((option) => (
-                        <option key={option} value={option}>{option} Ay</option>
-                      ))}
-                    </select>
-                    <input
-                      className="input-shell w-32"
-                      type="number"
-                      min="0"
-                      placeholder="Ücret"
-                      value={subscriptionExtensionValues[club.id]?.amount ?? 0}
-                      onChange={(e) =>
-                        setSubscriptionExtensionValues((prev) => ({
-                          ...prev,
-                          [club.id]: { ...(prev[club.id] ?? {}), amount: Number(e.target.value) },
-                        }))
-                      }
-                    />
-                    <button
-                      className="primary-btn"
-                      onClick={() =>
-                        handleExtendSubscription(
-                          club.id,
-                          subscriptionExtensionValues[club.id]?.months ?? club.subscription?.packageMonths ?? 12,
-                          subscriptionExtensionValues[club.id]?.amount ?? 0
-                        )
-                      }
-                    >
-                      Aboneliği Uzat
-                    </button>
+          {superAdminDetailClubId && (() => {
+            const detailClub = clubs.find((club) => club.id === superAdminDetailClubId) ?? null;
+            if (!detailClub) return null;
+
+            const parentEntries = Array.from(
+              new Map(
+                ((detailClub.students ?? [])
+                  .filter((student) => student.parentName || student.parentPhone)
+                  .map((student) => {
+                    const parentKey = `${String(student.parentName || '').trim()}|${normalizeWhatsappNumber(student.parentPhone || '')}`;
+                    return [parentKey, {
+                      name: student.parentName || 'Veli',
+                      phone: student.parentPhone || '',
+                      students: [student],
+                    }];
+                  }))
+              ).values()
+            );
+
+            return (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+                <div className="card-surface max-h-[85vh] w-full max-w-5xl overflow-hidden rounded-[28px] border border-slate-700">
+                  <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-violet-300">Kulüp detayları</p>
+                      <h3 className="text-2xl font-bold text-white">{detailClub.name}</h3>
+                    </div>
+                    <button className="text-2xl text-slate-300 hover:text-white" onClick={() => setSuperAdminDetailClubId(null)}>×</button>
                   </div>
 
-                  <button className="primary-btn" onClick={() => handleToggleClubStatus(club.id)}>
-                    {club.suspended ? 'Hesabı Aktive Et' : 'Hesabı Askıya Al'}
-                  </button>
+                  <div className="max-h-[70vh] overflow-y-auto p-5">
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <h4 className="text-lg font-semibold text-white">Veliler</h4>
+                          <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-1 text-xs text-slate-300">{parentEntries.length}</span>
+                        </div>
+                        <div className="space-y-3">
+                          {parentEntries.length ? (
+                            parentEntries.map((parent, index) => (
+                              <div key={`${parent.name}-${index}`} className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+                                <div className="font-medium text-white">{parent.name}</div>
+                                <div className="mt-1 text-xs text-slate-400">{parent.phone ? formatWhatsappDisplay(parent.phone) : 'Telefon yok'}</div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {(detailClub.students ?? [])
+                                    .filter((student) => (student.parentName || '').trim().toLowerCase() === parent.name.trim().toLowerCase() || normalizeWhatsappNumber(student.parentPhone || '') === normalizeWhatsappNumber(parent.phone || ''))
+                                    .map((student, studentIndex) => (
+                                      <span key={`${student.id || student.name}-${studentIndex}`} className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[11px] text-violet-200">
+                                        {student.name || student.full_name || student.studentName || 'Öğrenci'}
+                                      </span>
+                                    ))}
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">Bu kulübe ait veli kaydı yok.</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <h4 className="text-lg font-semibold text-white">Öğrenciler</h4>
+                          <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-1 text-xs text-slate-300">{detailClub.students?.length ?? 0}</span>
+                        </div>
+                        <div className="space-y-3">
+                          {(detailClub.students ?? []).length ? (
+                            (detailClub.students ?? []).map((student) => (
+                              <div key={student.id || `${student.name}-${student.parentPhone}`} className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="font-medium text-white">{student.name || student.full_name || student.studentName || 'Öğrenci'}</div>
+                                    <div className="text-xs text-slate-400">Veli: {student.parentName || 'Belirtilmemiş'}</div>
+                                  </div>
+                                  <span className={`status-pill ${student.status === 'active' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-500/15 text-slate-300'}`}>
+                                    {student.status || 'active'}
+                                  </span>
+                                </div>
+                                <div className="mt-2 text-xs text-slate-400">{student.parentPhone ? formatWhatsappDisplay(student.parentPhone) : 'Telefon yok'}</div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">Bu kulübe ait öğrenci kaydı yok.</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
+            );
+          })()}
+        </>
       )}
 
       {superAdminTab === 'newClub' && (
@@ -1027,10 +2157,10 @@ function AppClean() {
           <h3 className="mb-4 text-xl font-semibold text-white">Yeni Kulüp Kaydet</h3>
           <div className="grid gap-4 md:grid-cols-2">
             <input className="input-shell" placeholder="Kulüp Adı" value={newClub.clubName} onChange={(e) => setNewClub({ ...newClub, clubName: e.target.value })} />
-            <input className="input-shell" placeholder="Yönetici Adı Soyadı" value={newClub.managerName} onChange={(e) => setNewClub({ ...newClub, managerName: e.target.value })} />
+            <input className="input-shell" placeholder="Yönetici Adı Soyadı" value={newClub.managerName} onChange={(e) => setNewClub({ ...newClub, managerName: e.target.value, username: generateUsername(e.target.value) })} />
             <input className="input-shell" placeholder="İletişim Bilgileri" value={newClub.contact} onChange={(e) => setNewClub({ ...newClub, contact: e.target.value })} />
             <input className="input-shell" placeholder="Kulüp WhatsApp Numarası" value={newClub.whatsappNumber ? formatWhatsappDisplay(newClub.whatsappNumber) : ''} onChange={(e) => setNewClub({ ...newClub, whatsappNumber: normalizeWhatsappNumber(e.target.value) })} />
-            <input className="input-shell" placeholder="Sistem Giriş Kullanıcı Adı" value={newClub.username} onChange={(e) => setNewClub({ ...newClub, username: e.target.value })} />
+            <input className="input-shell" placeholder="Sistem Giriş Kullanıcı Adı" value={newClub.username} onChange={(e) => setNewClub({ ...newClub, username: generateUsername(e.target.value) })} />
             <input className="input-shell" type="password" placeholder="Şifre" value={newClub.password} onChange={(e) => setNewClub({ ...newClub, password: e.target.value })} />
             <input className="input-shell md:col-span-2" placeholder="Adres" value={newClub.address} onChange={(e) => setNewClub({ ...newClub, address: e.target.value })} />
             <div className="md:col-span-2 grid gap-4 md:grid-cols-2">
@@ -1055,18 +2185,19 @@ function AppClean() {
     const availableManagerBranches = currentClub?.branches ?? [];
     const branchStudents = managerSelectedBranchId ? managerStudents.filter((student) => getStudentBranchIds(student).includes(managerSelectedBranchId)) : [];
     const selectedManagerStudent = branchStudents.find((student) => student.id === managerSelectedStudentId) ?? branchStudents[0] ?? null;
+    const managerCoaches = users.filter((user) => user.role === 'coach' && user.clubId === currentClub?.id);
 
     return (
       <div className="space-y-6">
         <div className="card-surface rounded-3xl p-3 sm:p-4">
           <div className="flex flex-wrap gap-2">
-            {['info', 'branches', 'pending', 'students', 'payments', 'announcements'].map((tab) => (
+            {['info', 'branches', 'coaches', 'pending', 'students', 'payments', 'messages', 'announcements'].map((tab) => (
               <button
                 key={tab}
                 className={`rounded-xl px-3 py-2 text-xs font-semibold sm:text-sm ${managerTab === tab ? 'bg-gradient-to-r from-violet-600 to-orange-500 text-white' : 'bg-slate-950/80 text-slate-300'}`}
                 onClick={() => setManagerTab(tab)}
               >
-                {tab === 'info' ? 'Kulüp Bilgileri' : tab === 'branches' ? 'Branşlar' : tab === 'pending' ? 'Bekleyenler' : tab === 'students' ? 'Öğrenciler' : tab === 'payments' ? 'Ödemeler' : 'Duyurular'}
+                {tab === 'info' ? 'Kulüp Bilgileri' : tab === 'branches' ? 'Branşlar' : tab === 'coaches' ? 'Antrenörler' : tab === 'pending' ? 'Bekleyenler' : tab === 'students' ? 'Öğrenciler' : tab === 'payments' ? 'Ödemeler' : tab === 'messages' ? 'Gelen Mesajlar' : 'Duyurular'}
               </button>
             ))}
           </div>
@@ -1104,15 +2235,30 @@ function AppClean() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <input className="input-shell" placeholder="Öğrenci Adı" value={applicationForm.studentName} onChange={(e) => setApplicationForm({ ...applicationForm, studentName: e.target.value })} />
-                <input className="input-shell" placeholder="Öğrenci Soyadı" value={applicationForm.studentSurname} onChange={(e) => setApplicationForm({ ...applicationForm, studentSurname: e.target.value })} />
+                <input
+                  className="input-shell"
+                  placeholder="Öğrenci Adı Soyadı"
+                  value={applicationForm.studentName}
+                  onChange={(e) => setApplicationForm({ ...applicationForm, studentName: toTurkishUpper(e.target.value) })}
+                />
                 <input className="input-shell" type="date" value={applicationForm.birthDate} onChange={(e) => setApplicationForm({ ...applicationForm, birthDate: e.target.value })} />
-                <select className="input-shell" value={applicationForm.branchId} onChange={(e) => setApplicationForm({ ...applicationForm, branchId: e.target.value })}>
+                <select
+                  className="input-shell"
+                  value={applicationForm.branchId || ''}
+                  onChange={(e) => setApplicationForm({ ...applicationForm, branchId: e.target.value })}
+                  style={{ color: applicationForm.branchId ? '#f8fafc' : '#94a3b8' }}
+                >
+                  <option value="" disabled>Branş Seçiniz</option>
                   {(currentClub?.branches ?? []).map((branch) => (
                     <option key={branch.id} value={branch.id}>{branch.name}</option>
                   ))}
                 </select>
-                <input className="input-shell" placeholder="Veli Adı Soyadı" value={applicationForm.parentName} onChange={(e) => setApplicationForm({ ...applicationForm, parentName: e.target.value })} />
+                <input
+                  className="input-shell"
+                  placeholder="Veli Adı Soyadı"
+                  value={applicationForm.parentName}
+                  onChange={(e) => setApplicationForm({ ...applicationForm, parentName: toTurkishUpper(e.target.value) })}
+                />
                 <input className="input-shell" placeholder="Veli Telefon" value={applicationForm.parentPhone} onChange={(e) => setApplicationForm({ ...applicationForm, parentPhone: e.target.value })} />
                 <div className="input-shell flex items-center text-slate-300 md:col-span-2">
                   {generateUsername(applicationForm.parentName || '') || 'VELİ KULLANICI ADI OTOMATİK OLUŞACAK'}
@@ -1137,14 +2283,24 @@ function AppClean() {
                 </label>
               </div>
 
-              <textarea className="input-shell mt-5 min-h-28" placeholder="Not ekleyebilirsiniz" value={applicationForm.notes} onChange={(e) => setApplicationForm({ ...applicationForm, notes: e.target.value })} />
+              <textarea
+            className="input-shell mt-5 min-h-28"
+            placeholder="Not ekleyebilirsiniz"
+            value={applicationForm.notes}
+            onChange={(e) => setApplicationForm({ ...applicationForm, notes: toTurkishUpper(e.target.value) })}
+          />
 
               <div className="mt-5 flex justify-end">
                 <button
                   className="primary-btn"
-                  onClick={() => {
+                  onClick={async () => {
                     if (!applicationForm.acceptKvkk || !applicationForm.acceptPolicy) {
                       alert('KVKK ve muvafakat onayı gereklidir.');
+                      return;
+                    }
+
+                    if (!applicationForm.branchId) {
+                      alert('Lütfen bir branş seçiniz.');
                       return;
                     }
 
@@ -1155,21 +2311,50 @@ function AppClean() {
                       return;
                     }
 
+                    const finalUsername = generatedUsername || normalizeWhatsappNumber(applicationForm.parentPhone) || `VELI-${Date.now()}`;
                     const payload = {
-                      id: `app-${Date.now()}`,
-                      studentName: `${applicationForm.studentName} ${applicationForm.studentSurname}`.trim(),
+                      studentName: applicationForm.studentName.trim(),
+                      studentSurname: '',
                       branchId: applicationForm.branchId,
                       parentName: applicationForm.parentName,
                       parentPhone: applicationForm.parentPhone,
                       parentPassword,
-                      username: generatedUsername,
+                      username: finalUsername,
                       files: ['sağlık_raporu.pdf'],
                       status: 'pending',
                     };
 
-                    console.log('ADD_PENDING_APPLICATION', payload);
-                    setBekleyenler((prev) => [{ ...payload }, ...prev]);
-                    setClubs((prev) => prev.map((club) => (club.id === currentClub?.id ? { ...club, pendingApplications: [payload, ...(club.pendingApplications ?? [])] } : club)));
+                    const dbResult = await persistApplicationToSupabase({
+                      ...payload,
+                      clubId: currentClub?.id,
+                    });
+
+                    if (!dbResult.ok) {
+                      console.error('Supabase manager application insert failed.', dbResult.error);
+                      alert('Online kayıt veritabanına gönderilemedi.');
+                      return;
+                    }
+
+                    const insertedApplication = (dbResult.data && dbResult.data[0]) || {
+                      id: `app-${Date.now()}`,
+                      ...payload,
+                      clubId: currentClub?.id,
+                      status: 'pending',
+                      createdAt: new Date().toISOString(),
+                    };
+
+                    setClubs((prev) =>
+                      prev.map((club) =>
+                        club.id === currentClub?.id
+                          ? {
+                              ...club,
+                              pendingApplications: [insertedApplication, ...(club.pendingApplications ?? [])],
+                            }
+                          : club
+                      )
+                    );
+
+                    await loadClubs();
                     setApplicationForm(defaultForm);
                     setToastMessage('Online kayıt formu başarıyla gönderildi.');
                   }}
@@ -1196,7 +2381,16 @@ function AppClean() {
                   <div key={branch.id} className="rounded-xl border border-slate-700 bg-slate-900/80 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium text-white">{branch.name}</span>
-                      <span className="text-xs text-slate-400">{branch.coachIds.length} antrenör</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">{branch.coachIds?.length ?? 0} antrenör</span>
+                        <button
+                          type="button"
+                          className="rounded-lg border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-200 transition hover:bg-red-500/20"
+                          onClick={() => handleDeleteBranch(branch.id)}
+                        >
+                          Sil
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
                       <input
@@ -1238,6 +2432,129 @@ function AppClean() {
               </div>
               <button className="primary-btn w-full sm:w-auto" onClick={handleAddCoach}>Antrenör Kaydet</button>
             </div>
+          </div>
+        )}
+
+        {managerTab === 'coaches' && (
+          <div className="card-surface rounded-3xl p-4 sm:p-6">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="text-xl font-semibold text-white">Antrenörler</h3>
+              <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-1 text-xs text-slate-300">{managerCoaches.length} kayıt</span>
+            </div>
+
+            {managerCoaches.length ? (
+              <div className="grid gap-3">
+                {managerCoaches.map((coach) => {
+                  const coachBranch = currentClub?.branches?.find((branch) => branch.id === coach.branchId);
+                  const isCoachActive = coach.isActive !== false;
+
+                  return (
+                    <div key={coach.id} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <div className="text-lg font-semibold text-white">{coach.name}</div>
+                          <div className="text-xs text-slate-400">{coach.username || 'kullaniciadi'}</div>
+                        </div>
+                        <span className={`status-pill ${isCoachActive ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-500/15 text-slate-300'}`}>
+                          {isCoachActive ? 'Aktif' : 'Pasif'}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-200">
+                        Branş: <span className="font-semibold text-violet-300">{coachBranch?.name || 'Belirtilmemiş'}</span>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className={isCoachActive ? 'secondary-btn' : 'primary-btn'}
+                          onClick={async () => {
+                            const nextStatus = !isCoachActive;
+                            setUsers((prev) => prev.map((user) => user.id === coach.id ? { ...user, isActive: nextStatus } : user));
+
+                            try {
+                              const { error } = await supabase
+                                .from('club_coaches')
+                                .update({ is_active: nextStatus })
+                                .eq('club_id', currentClub?.id)
+                                .eq('username', coach.username || coach.name);
+
+                              if (error) throw error;
+
+                              await supabase
+                                .from('profiles')
+                                .update({ is_active: nextStatus })
+                                .eq('club_id', currentClub?.id)
+                                .eq('role', 'coach')
+                                .eq('username', coach.username || coach.name);
+
+                              setToastMessage(`Antrenör durumu ${nextStatus ? 'aktif' : 'pasif'} olarak güncellendi.`);
+                            } catch (error) {
+                              console.error('Coach status update failed:', error);
+                              alert('Antrenör durumu güncellenemedi.');
+                            }
+                          }}
+                        >
+                          {isCoachActive ? 'Pasifleştir' : 'Aktifleştir'}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="bg-red-600/20 border border-red-500/40 text-red-200 px-3 py-2 rounded-xl text-sm font-semibold hover:bg-red-600/30"
+                          onClick={async () => {
+                            const confirmed = window.confirm(`${coach.name} antrenörünü silmek istediğinize emin misiniz?`);
+                            if (!confirmed) return;
+
+                            try {
+                              const { error: coachDeleteError } = await supabase
+                                .from('club_coaches')
+                                .delete()
+                                .eq('club_id', currentClub?.id)
+                                .eq('username', coach.username || coach.name);
+
+                              if (coachDeleteError) throw coachDeleteError;
+
+                              const { error: profileDeleteError } = await supabase
+                                .from('profiles')
+                                .delete()
+                                .eq('club_id', currentClub?.id)
+                                .eq('role', 'coach')
+                                .eq('username', coach.username || coach.name);
+
+                              if (profileDeleteError) throw profileDeleteError;
+
+                              setUsers((prev) => prev.filter((user) => user.id !== coach.id));
+                              setClubs((prev) => prev.map((club) => (
+                                club.id === currentClub?.id
+                                  ? {
+                                      ...club,
+                                      branches: (club.branches ?? []).map((branch) =>
+                                        branch.id === coach.branchId
+                                          ? { ...branch, coachIds: (branch.coachIds ?? []).filter((item) => item !== coach.id) }
+                                          : branch
+                                      ),
+                                    }
+                                  : club
+                              )));
+                              setToastMessage('Antrenör silindi.');
+                            } catch (error) {
+                              console.error('Coach delete failed:', error);
+                              alert('Antrenör silinemedi.');
+                            }
+                          }}
+                        >
+                          Sil
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400">
+                Bu kulüpte kayıtlı antrenör bulunmuyor.
+              </div>
+            )}
           </div>
         )}
 
@@ -1473,19 +2790,41 @@ function AppClean() {
 
         {managerTab === 'messages' && (
           <div className="card-surface rounded-3xl p-4 sm:p-6">
-            <h3 className="mb-4 text-xl font-semibold text-white">Gelen Mesajlar / İletişim</h3>
+            <h3 className="mb-4 text-xl font-semibold text-white">Gelen Mesajlar</h3>
             <div className="space-y-3">
               {(currentClub?.incomingMessages || []).length ? (
                 currentClub.incomingMessages.map((message) => (
-                  <div key={message.id} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
+                  <div key={message.id} className={`rounded-2xl border p-4 ${message.read ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-700 bg-slate-900/80'}`}>
                     <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <div className="font-semibold text-white">{message.senderName}</div>
                         <div className="text-xs text-violet-300">{message.senderRole}</div>
                       </div>
-                      <div className="text-xs text-slate-400">{new Date(message.sentAt).toLocaleString('tr-TR')}</div>
+                      <div className="flex items-center gap-2 text-xs text-slate-400">
+                        <span>{new Date(message.sentAt).toLocaleString('tr-TR')}</span>
+                        {message.read && <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-emerald-300">Okundu</span>}
+                      </div>
                     </div>
+                    {(message.studentName || message.studentId) && (
+                      <div className="mb-2 text-xs text-slate-300">
+                        Öğrenci: <span className="font-medium text-white">{message.studentName || 'Belirtilmemiş'}</span>
+                      </div>
+                    )}
                     <div className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{message.message}</div>
+                    <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                      <button
+                        className={`rounded-xl px-3 py-2 text-sm font-medium ${message.read ? 'border border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'bg-violet-600 text-white hover:bg-violet-500'}`}
+                        onClick={() => markMessageAsRead(message.id)}
+                      >
+                        Okundu Olarak İşaretle
+                      </button>
+                      <button
+                        className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-200 hover:bg-red-500/20"
+                        onClick={() => deleteMessage(message.id)}
+                      >
+                        Sil
+                      </button>
+                    </div>
                   </div>
                 ))
               ) : (
@@ -1502,15 +2841,14 @@ function AppClean() {
             <h3 className="mb-4 text-xl font-semibold text-white">Toplu Duyuru / Bildirim</h3>
             <div className="space-y-3">
               <select className="input-shell" value={announcementForm.target} onChange={(e) => setAnnouncementForm({ ...announcementForm, target: e.target.value })}>
-                <option>Tüm Okula</option>
-                <option>Futbol</option>
-                <option>Basketbol</option>
+                {announcementTargets.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
               <input className="input-shell" placeholder="Bildirim türü" value={announcementForm.title} onChange={(e) => setAnnouncementForm({ ...announcementForm, title: e.target.value })} />
               <textarea className="input-shell min-h-28" placeholder="Mesaj içeriği" value={announcementForm.message} onChange={(e) => setAnnouncementForm({ ...announcementForm, message: e.target.value })} />
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button className="primary-btn w-full sm:w-auto" onClick={handleSendAnnouncement}>Bildirimi Gönder</button>
-                <button className="secondary-btn w-full sm:w-auto" onClick={handleWhatsAppAnnouncementSend}>WhatsApp ile Gönder</button>
               </div>
             </div>
           </div>
@@ -1519,9 +2857,76 @@ function AppClean() {
     );
   };
 
-  const renderCoachPanel = () => {
-    const branchName = currentClub?.branches.find((branch) => branch.id === currentUser?.branchId)?.name ?? 'Branş';
-    const coachStudents = currentClub?.students.filter((student) => getStudentBranchIds(student).includes(currentUser?.branchId)) ?? [];
+  function CoachPanel({
+    currentUser,
+    users,
+    clubs,
+    currentClub,
+    activeDisplayUser,
+    selectedClubId,
+    profilePassword,
+    setProfilePassword,
+    handlePasswordUpdate,
+    handleAttendanceUpdate,
+    sendManagerMessage,
+    coachTab,
+    setCoachTab,
+    coachViewClubId,
+    setCoachViewCoachId,
+    coachMessageText,
+    setCoachMessageText,
+    getClubById,
+    getStudentBranchIds,
+  }) {
+    const coachAuthorizedClubIds = useMemo(() => {
+      if (!currentUser || currentUser.role !== 'coach') return [];
+
+      const seedIds = [currentUser.clubId, ...users
+        .filter((user) => user.role === 'coach')
+        .filter((user) => {
+          const sameId = user.id === currentUser.id;
+          const sameUsername = !!currentUser.username && !!user.username && String(user.username).trim().toUpperCase() === String(currentUser.username).trim().toUpperCase();
+          const sameName = !!currentUser.name && !!user.name && String(user.name).trim().toUpperCase() === String(currentUser.name).trim().toUpperCase();
+          const sameEmail = !!currentUser.email && !!user.email && String(user.email).trim().toUpperCase() === String(currentUser.email).trim().toUpperCase();
+          return sameId || sameUsername || sameName || sameEmail;
+        })
+        .map((user) => user.clubId)
+        .filter(Boolean)]
+        .filter(Boolean);
+
+      return [...new Set(seedIds)];
+    }, [currentUser, users]);
+
+    const coachClubOptions = useMemo(() => {
+      if (!coachAuthorizedClubIds.length) return clubs;
+      return clubs.filter((club) => coachAuthorizedClubIds.includes(club.id));
+    }, [clubs, coachAuthorizedClubIds]);
+
+    const effectiveCoachClubId = coachViewClubId && coachClubOptions.some((club) => club.id === coachViewClubId)
+      ? coachViewClubId
+      : (coachClubOptions[0]?.id ?? currentUser?.clubId ?? selectedClubId ?? clubs[0]?.id ?? '');
+
+    const coachClub = coachClubOptions.find((club) => club.id === effectiveCoachClubId)
+      ?? clubs.find((club) => club.id === currentUser?.clubId)
+      ?? currentClub
+      ?? clubs[0]
+      ?? null;
+
+    const coachListForClub = users.filter((user) => user.role === 'coach' && user.clubId === coachClub?.id);
+    const selectedCoach = coachListForClub.find((user) => user.id === coachViewClubId)
+      ?? coachListForClub.find((user) => user.id === currentUser?.id)
+      ?? coachListForClub[0]
+      ?? null;
+
+    const validBranchIds = new Set((coachClub?.branches ?? []).map((branch) => branch.id));
+    const selectedCoachBranchId = (selectedCoach?.branchId && validBranchIds.has(selectedCoach.branchId))
+      ? selectedCoach.branchId
+      : (coachClub?.branches?.[0]?.id ?? '');
+    const selectedCoachBranch = coachClub?.branches?.find((branch) => branch.id === selectedCoachBranchId) ?? coachClub?.branches?.[0] ?? null;
+    const coachStudents = coachClub?.students.filter((student) => getStudentBranchIds(student).includes(selectedCoachBranchId)) ?? [];
+    const clubNameForCoach = coachClub?.name || getClubById(currentUser?.clubId)?.name || 'Kulüp';
+    const branchName = selectedCoachBranch?.name || 'Branş';
+    const coachDisplayName = `${selectedCoach?.name || activeDisplayUser?.name || currentUser?.name || 'Antrenör'} - ${clubNameForCoach} (${branchName})`;
     const todayIso = new Date().toISOString().slice(0, 10);
     const presentCount = coachStudents.filter((student) => (student.attendance ?? []).some((entry) => entry.date === todayIso && entry.status === 'present')).length;
     const pendingCount = coachStudents.length - presentCount;
@@ -1537,13 +2942,61 @@ function AppClean() {
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-sm text-slate-400">Antrenör</p>
-              <h2 className="text-2xl font-bold text-white">{activeDisplayUser?.name || currentUser?.name || 'Antrenör'}</h2>
+              <h2 className="text-2xl font-bold text-white">{coachDisplayName}</h2>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="rounded-xl border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm text-violet-200">{branchName}</div>
               <div className="rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-200">{coachStudents.length} öğrenci</div>
             </div>
           </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-2">
+            <label className="space-y-2">
+              <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Kulüp Seç</span>
+              <select
+                className="input-shell"
+                value={effectiveCoachClubId}
+                onChange={(event) => {
+                  const nextClubId = event.target.value;
+                  setCoachViewCoachId(nextClubId);
+                  const nextCoachList = users.filter((user) => user.role === 'coach' && user.clubId === nextClubId);
+                  if (nextCoachList.length) {
+                    setCoachViewCoachId(nextCoachList[0].id);
+                  } else {
+                    setCoachViewCoachId('');
+                  }
+                }}
+              >
+                <option value="">Kulüp Seç</option>
+                {coachClubOptions.map((club) => (
+                  <option key={club.id} value={club.id}>{club.name}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-2">
+              <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Antrenör Seç</span>
+              <select
+                className="input-shell"
+                value={selectedCoach?.id ?? ''}
+                onChange={(event) => setCoachViewCoachId(event.target.value)}
+                disabled={!effectiveCoachClubId || coachListForClub.length === 0}
+              >
+                <option value="">Antrenör Seç</option>
+                {coachListForClub.map((coachUser) => (
+                  <option key={coachUser.id} value={coachUser.id}>{coachUser.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {!effectiveCoachClubId && (
+            <div className="mt-5 rounded-2xl border border-dashed border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-400">Kulüp seçimi yaparak ilgili antrenör ve öğrenci verilerini görüntüleyebilirsiniz.</div>
+          )}
+
+          {effectiveCoachClubId && !coachListForClub.length && (
+            <div className="mt-5 rounded-2xl border border-dashed border-slate-700 bg-slate-900/60 p-4 text-sm text-amber-300">Seçilen kulüpte kayıtlı antrenör bulunmuyor.</div>
+          )}
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
@@ -1655,19 +3108,17 @@ function AppClean() {
         )}
       </div>
     );
-  };
+  }
 
   const renderAttendanceSummaryModal = () => {
-    const summaryStudent = currentClub?.students.find((student) => student.id === attendanceCalendar.studentId) ?? null;
-    if (!summaryStudent) return null;
-
+    const summaryStudent = currentClub?.students.find((student) => student.id === attendanceCalendar.studentId) ?? currentClub?.students[0] ?? null;
     const monthKey = attendanceCalendar.month || new Date().toISOString().slice(0, 7);
     const monthCells = getCalendarMonthCells(monthKey);
     const monthDate = new Date(`${monthKey}-01T00:00:00`);
     const monthLabel = monthDate.toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' });
     const attendanceByDate = {};
 
-    (summaryStudent.attendance || []).forEach((entry) => {
+    (summaryStudent?.attendance || []).forEach((entry) => {
       if (!entry?.date) return;
       attendanceByDate[entry.date] = entry.status;
     });
@@ -1678,9 +3129,9 @@ function AppClean() {
           <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
             <div>
               <h3 className="text-xl font-bold text-white">Aylık Katılım Özeti</h3>
-              <p className="text-sm text-slate-400">{summaryStudent.name} • {monthLabel}</p>
+              <p className="text-sm text-slate-400">{summaryStudent?.name || 'Öğrenci seçilmedi'} • {monthLabel}</p>
             </div>
-            <button className="text-xl text-slate-300 hover:text-white" onClick={() => setShowAttendanceSummaryModal(false)}>×</button>
+            <button type="button" className="text-xl text-slate-300 hover:text-white" onClick={() => setShowAttendanceSummaryModal(false)}>×</button>
           </div>
 
           <div className="space-y-4 p-5">
@@ -1781,9 +3232,11 @@ function AppClean() {
             <div className="mb-4 flex items-center justify-between gap-3">
               <h3 className="text-xl font-semibold text-white">Devamsızlık Geçmişi</h3>
               <button
+                type="button"
                 className="secondary-btn"
                 onClick={() => {
-                  setAttendanceCalendar({ studentId: childStudent?.id ?? null, month: new Date().toISOString().slice(0, 7) });
+                  const nextStudentId = childStudent?.id ?? null;
+                  setAttendanceCalendar({ studentId: nextStudentId, month: new Date().toISOString().slice(0, 7) });
                   setShowAttendanceSummaryModal(true);
                 }}
               >
@@ -1872,7 +3325,10 @@ function AppClean() {
                       alert('Mesaj içeriği boş olamaz.');
                       return;
                     }
-                    sendManagerMessage(currentUser?.name || 'Veli', 'Veli', content);
+                    sendManagerMessage(currentUser?.name || 'Veli', 'Veli', content, {
+                      studentId: childStudent?.id,
+                      studentName: childStudent?.name || childStudent?.full_name || 'Öğrenci',
+                    });
                     setParentMessageText('');
                   }}
                 >
@@ -1925,7 +3381,7 @@ function AppClean() {
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-3xl">⚠️</div>
         <h2 className="text-2xl font-bold text-white">Abonelik süreniz dolmuştur / Hesabınız askıya alınmıştır</h2>
         <p className="mt-3 text-slate-300">Sistem yöneticisi tarafından kulüp hesabınız pasifleştirildi. Lütfen iletişime geçin veya yeni abonelik başlatın.</p>
-        <button className="primary-btn mt-6" onClick={() => setCurrentUser(null)}>Çıkış Yap</button>
+        <button className="primary-btn mt-6" onClick={handleLogout}>Çıkış Yap</button>
       </div>
     </div>
   );
@@ -1937,6 +3393,109 @@ function AppClean() {
       return;
     }
     window.open(buildWhatsAppLink(sanitized, text), '_blank', 'noopener,noreferrer');
+  };
+
+  const handleLogin = async () => {
+    const username = document.getElementById('login-input')?.value ?? '';
+    const password = document.getElementById('password-input')?.value ?? '';
+    const cleanedUsername = String(username ?? '').trim();
+    const enteredPassword = String(password ?? '').trim();
+
+    const matchesLoginIdentity = (row, usernameValue) => {
+      const candidateUsername = String(row?.username ?? '').trim();
+      const candidateEmail = String(row?.email ?? '').trim();
+      const candidateName = String(row?.manager_name ?? row?.full_name ?? row?.name ?? '').trim();
+
+      return (
+        normalizeAuthText(candidateUsername) === normalizeAuthText(usernameValue) ||
+        normalizeAuthText(candidateEmail) === normalizeAuthText(usernameValue) ||
+        normalizeAuthText(candidateName) === normalizeAuthText(usernameValue) ||
+        candidateUsername.toUpperCase() === usernameValue.toUpperCase() ||
+        candidateEmail.toUpperCase() === usernameValue.toUpperCase() ||
+        candidateName.toUpperCase() === usernameValue.toUpperCase()
+      );
+    };
+
+    const applyAuthenticatedUser = (userRecord, fallbackRole = 'parent') => {
+      const mappedUser = {
+        id: userRecord.id,
+        name: userRecord.manager_name || userRecord.full_name || userRecord.name || cleanedUsername,
+        username: userRecord.username || cleanedUsername,
+        password: userRecord.password || enteredPassword,
+        role: userRecord.role || fallbackRole,
+        clubId: userRecord.club_id || userRecord.id || null,
+        phone: userRecord.phone || '',
+        email: userRecord.email || '',
+        isActive: userRecord.is_active !== false,
+      };
+
+      setCurrentUser(mappedUser);
+      setActiveRole(mappedUser.role);
+      const nextClubId = mappedUser.clubId || clubs[0]?.id;
+      if (nextClubId) setSelectedClubId(nextClubId);
+      return mappedUser;
+    };
+
+    if (supabase && supabase.from) {
+      const { data: clubData, error: clubError } = await supabase.from('clubs').select('*');
+      console.log('1. Clubs tablosu arama sonucu:', clubData, clubError);
+
+      if (!clubError && Array.isArray(clubData) && clubData.length > 0) {
+        const clubMatch = clubData.find((row) => {
+          const storedPassword = String(row.password ?? '').trim();
+          const matchesIdentity = matchesLoginIdentity(row, cleanedUsername);
+          return storedPassword === enteredPassword && matchesIdentity;
+        });
+
+        console.log('Clubs tablosunda eşleşen kullanıcı:', clubMatch);
+
+        if (clubMatch) {
+          const mappedUser = applyAuthenticatedUser({
+            ...clubMatch,
+            role: clubMatch.role || 'club-manager',
+            club_id: clubMatch.id,
+          }, 'club-manager');
+          console.log('Clubs tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
+          return;
+        }
+      }
+
+      const { data: profileData, error: profileError } = await supabase.from('profiles').select('*');
+      console.log('2. Profiles tablosu arama sonucu:', profileData, profileError);
+
+      if (!profileError && Array.isArray(profileData) && profileData.length > 0) {
+        const profileMatch = profileData.find((row) => {
+          const storedPassword = String(row.password ?? '').trim();
+          const matchesIdentity = matchesLoginIdentity(row, cleanedUsername);
+          return storedPassword === enteredPassword && matchesIdentity;
+        });
+
+        console.log('Profiles tablosunda eşleşen kullanıcı:', profileMatch);
+
+        if (profileMatch) {
+          const mappedUser = applyAuthenticatedUser({
+            ...profileMatch,
+            role: profileMatch.role || 'parent',
+            club_id: profileMatch.club_id || null,
+          }, profileMatch.role || 'parent');
+          console.log('Profiles tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
+          return;
+        }
+      }
+    }
+
+    const localMatchingUser = findMatchingUser(cleanedUsername, enteredPassword);
+    if (localMatchingUser) {
+      console.log('Yerel eşleşme bulundu:', localMatchingUser);
+      setCurrentUser(localMatchingUser);
+      setActiveRole(localMatchingUser.role);
+      const nextClubId = localMatchingUser.clubId || clubs[0]?.id;
+      if (nextClubId) setSelectedClubId(nextClubId);
+      return;
+    }
+
+    console.log('Giriş başarısız. Aranan kullanıcı:', cleanedUsername);
+    alert('Giriş bilgileri hatalı. Kullanıcı adı ve şifreyi kontrol edin.');
   };
 
   const renderLoginScreen = () => (
@@ -1960,34 +3519,19 @@ function AppClean() {
                 <input
                   className="input-shell"
                   placeholder="Kullanıcı adı / e-posta"
-                  defaultValue="sagliksk@gmail.com"
+                  defaultValue=""
                   id="login-input"
                 />
                 <input
                   className="input-shell"
                   type="password"
                   placeholder="Şifre"
-                  defaultValue="Efraim+08"
+                  defaultValue=""
                   id="password-input"
                 />
                 <button
                   className="primary-btn w-full"
-                  onClick={() => {
-                    const username = document.getElementById('login-input').value;
-                    const password = document.getElementById('password-input').value;
-
-                    const matchingUser = findMatchingUser(username, password);
-
-                    if (!matchingUser) {
-                      alert('Giriş bilgileri hatalı veya onay bekleyen kullanıcı giriş yapamaz.');
-                      return;
-                    }
-
-                    setCurrentUser(matchingUser);
-                    setActiveRole(matchingUser.role);
-                    const nextClubId = matchingUser.clubId || clubs[0]?.id;
-                    if (nextClubId) setSelectedClubId(nextClubId);
-                  }}
+                  onClick={handleLogin}
                 >
                   Giriş Yap
                 </button>
@@ -2150,6 +3694,230 @@ function AppClean() {
     </div>
   );
 
+  const persistClubToSupabase = async (club) => {
+    const record = {
+      name: String(club?.name || '').trim(),
+      manager_name: String(club?.managerName || '').trim(),
+      phone: String(club?.phone || '').trim() || null,
+      whatsapp_number: String(club?.whatsappNumber || '').trim() || null,
+      address: String(club?.address || '').trim() || null,
+      username: String(club?.username || '').trim() || null,
+      password: String(club?.password || '').trim() || null,
+      suspended: Boolean(club?.suspended),
+      subscription: club?.subscription ?? null,
+      created_at: new Date().toISOString(),
+    };
+
+    if (!record.name) {
+      return { ok: false, error: new Error('Kulüp adı boş olamaz.') };
+    }
+
+    return insertIntoSupabase('clubs', [record]);
+  };
+
+  const persistProfileToSupabase = async ({ clubId, role, fullName, username, password, phone, isActive = true }) => {
+    const record = {
+      club_id: normalizeDbClubId(clubId),
+      role: String(role || 'parent').trim(),
+      full_name: String(fullName || '').trim(),
+      username: String(username || '').trim() || null,
+      password: String(password || '').trim() || null,
+      email: `${String(username || fullName || 'user').trim().toLowerCase().replace(/\s+/g, '.')}@local.invalid`,
+      phone: String(phone || '').trim() || null,
+      is_active: Boolean(isActive),
+      created_at: new Date().toISOString(),
+    };
+
+    if (!record.full_name || !record.club_id) {
+      return { ok: false, error: new Error('Profil kaydı için gerekli alanlar eksik.') };
+    }
+
+    return insertIntoSupabase('profiles', [record]);
+  };
+
+  const persistBranchToSupabase = async (branch) => {
+    const candidateClubId = branch?.clubId || selectedClubId || currentUser?.clubId || clubs[0]?.id;
+    const matchingClub = (clubs ?? []).find((club) => club.id === candidateClubId) ?? null;
+    const resolvedClubId = normalizeDbClubId(candidateClubId) || normalizeDbClubId(matchingClub?.id);
+
+    const record = {
+      club_id: resolvedClubId,
+      name: String(branch?.name || '').trim(),
+      monthly_fee: Number(branch?.monthlyFee ?? branch?.fee ?? 0),
+      created_at: new Date().toISOString(),
+    };
+
+    console.group('Supabase branch insert debug');
+    console.log('branch input payload:', branch);
+    console.log('candidateClubId:', candidateClubId);
+    console.log('matchingClub:', matchingClub);
+    console.log('resolvedClubId:', resolvedClubId);
+    console.log('branch record payload:', record);
+    console.groupEnd();
+
+    if (!record.club_id || !record.name) {
+      const details = {
+        candidateClubId,
+        selectedClubId,
+        currentUserClubId: currentUser?.clubId,
+        clubs: clubs.map((club) => ({ id: club.id, name: club.name, dbIdValid: Boolean(normalizeDbClubId(club.id)) })),
+        record,
+      };
+      console.error('Invalid branch insert payload:', details);
+      return { ok: false, error: new Error('Branş için geçerli bir kulüp ID si ve isim gerekli.') };
+    }
+
+    return insertIntoSupabase('club_branches', [record]);
+  };
+
+  const persistCoachToSupabase = async ({ clubId, name, username, password, phone, branchId }) => {
+    const record = {
+      club_id: normalizeDbClubId(clubId || selectedClubId),
+      name: String(name || '').trim(),
+      username: String(username || '').trim(),
+      password: String(password || '').trim(),
+      phone: String(phone || '').trim() || null,
+      branch_id: normalizeDbBranchId(branchId),
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+
+    if (!record.club_id || !record.name || !record.username) {
+      return { ok: false, error: new Error('Antrenör için gerekli alanlar eksik.') };
+    }
+
+    return insertIntoSupabase('club_coaches', [record]);
+  };
+
+  const persistApplicationToSupabase = async (payload) => {
+    const clubId = normalizeDbClubId(payload.clubId || validPublicFormClubId || publicFormClubId || initialPublicClubId || selectedClubId || currentUser?.clubId || '');
+    const record = {
+      club_id: clubId,
+      student_name: String(payload.studentName || '').trim(),
+      student_surname: String(payload.studentSurname || '').trim(),
+      parent_name: String(payload.parentName || '').trim(),
+      parent_phone: String(payload.parentPhone || '').trim(),
+      branch_id: normalizeDbBranchId(payload.branchId),
+      status: 'pending',
+      notes: String(payload.notes || '').trim() || null,
+      files: Array.isArray(payload.files) ? payload.files : ['sağlık_raporu.pdf'],
+      created_at: new Date().toISOString(),
+    };
+
+    if (!record.club_id || !record.student_name || !record.parent_name || !record.parent_phone) {
+      return { ok: false, error: new Error('Eksik kayıt alanları.') };
+    }
+
+    return insertIntoSupabase('club_applications', [record]);
+  };
+
+  const persistStudentToSupabase = async ({ clubId, name, parentName, parentPhone, branchId, birthDate, startedAt, status = 'active' }) => {
+    const record = {
+      club_id: normalizeDbClubId(clubId),
+      branch_id: normalizeDbBranchId(branchId),
+      full_name: String(name || '').trim(),
+      birth_date: birthDate || null,
+      parent_name: String(parentName || '').trim(),
+      parent_phone: String(parentPhone || '').trim(),
+      started_at: startedAt || new Date().toISOString().slice(0, 10),
+      status,
+      branch_ids: Array.isArray(branchId) ? branchId : [branchId].filter(Boolean),
+      branch_status: branchId ? { [branchId]: status } : {},
+      attendance: [],
+      created_at: new Date().toISOString(),
+    };
+
+    if (!record.full_name || !record.club_id) {
+      return { ok: false, error: new Error('Öğrenci kaydı için gerekli alanlar eksik.') };
+    }
+
+    return insertIntoSupabase('club_students', [record]);
+  };
+
+  const persistParentToSupabase = async ({ clubId, name, phone, username, password }) => {
+    const enteredPassword = String(password ?? '').trim();
+    const generatedUsername = generateUsername(name || username || '') || String(username || '').trim() || `VELI-${Date.now()}`;
+    const record = {
+      club_id: normalizeDbClubId(clubId),
+      role: 'parent',
+      full_name: String(name || '').trim(),
+      username: String(generatedUsername || '').trim() || null,
+      password: enteredPassword || null,
+      email: normalizeDbParentEmail(name, clubId),
+      phone: String(phone || '').trim() || null,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+
+    if (!record.club_id || !record.full_name) {
+      return { ok: false, error: new Error('Veli kaydı için kulüp ve ad gerekli.') };
+    }
+
+    if (!record.password) {
+      return { ok: false, error: new Error('Veli şifresi boş olamaz; formdaki girilen değer kullanılmalıdır.') };
+    }
+
+    return insertIntoSupabase('profiles', [record]);
+  };
+
+  const updateApplicationStatusInSupabase = async (applicationRef, status = 'approved') => {
+    const resolvedStatus = status || 'approved';
+    const applicationId = typeof applicationRef === 'string' ? applicationRef : applicationRef?.id;
+
+    if (!applicationId && (!applicationRef || !applicationRef.clubId)) {
+      return { ok: false, error: new Error('Onaylanacak başvurunun kimliği eksik.') };
+    }
+
+    if (!supabase || !supabase.from) {
+      return { ok: false, error: new Error('Supabase client unavailable') };
+    }
+
+    const normalizedAppId = typeof applicationId === 'string' ? applicationId.trim() : '';
+    let currentQuery = supabase.from('club_applications').update({ status: resolvedStatus });
+
+    if (isValidUuid(normalizedAppId)) {
+      currentQuery = currentQuery.eq('id', normalizedAppId);
+    } else if (applicationRef && typeof applicationRef === 'object') {
+      const clubId = normalizeDbClubId(applicationRef.clubId);
+      const studentName = String(applicationRef.studentName || '').trim();
+      const parentName = String(applicationRef.parentName || '').trim();
+      const parentPhone = String(applicationRef.parentPhone || '').trim();
+
+      currentQuery = currentQuery
+        .eq('club_id', clubId)
+        .eq('student_name', studentName)
+        .eq('parent_name', parentName)
+        .eq('parent_phone', parentPhone)
+    } else {
+      return { ok: false, error: new Error('Onaylanacak başvuru için güvenli eşleşme bulunamadı.') };
+    }
+
+    const { data, error } = await currentQuery.select();
+
+    if (error) {
+      console.error('Supabase application status update failed:', error);
+      return { ok: false, error };
+    }
+
+    if (!data?.length) {
+      const fallbackQuery = supabase
+        .from('club_applications')
+        .select('id')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const { data: fallbackData, error: fallbackError } = await fallbackQuery;
+      if (fallbackError) {
+        console.error('Supabase application status fallback read failed:', fallbackError);
+        return { ok: false, error: fallbackError };
+      }
+
+      return { ok: false, error: new Error('Onaylanacak başvuru veritabanında eşleşmedi.') };
+    }
+
+    return { ok: true, data: data ?? [] };
+  };
+
   const renderApplicationForm = () => (
     <div className="mx-auto max-w-5xl px-4 py-8">
       <div className="card-surface rounded-[32px] p-6 md:p-8">
@@ -2163,15 +3931,30 @@ function AppClean() {
 
         <div className="grid gap-5 md:grid-cols-2">
           <input className="input-shell" placeholder="Kulüp" value={formClub?.name} disabled />
-          <input className="input-shell" placeholder="Öğrenci Adı" value={applicationForm.studentName} onChange={(e) => setApplicationForm({ ...applicationForm, studentName: e.target.value })} />
-          <input className="input-shell" placeholder="Öğrenci Soyadı" value={applicationForm.studentSurname} onChange={(e) => setApplicationForm({ ...applicationForm, studentSurname: e.target.value })} />
+          <input
+            className="input-shell"
+            placeholder="Öğrenci Adı Soyadı"
+            value={applicationForm.studentName}
+            onChange={(e) => setApplicationForm({ ...applicationForm, studentName: toTurkishUpper(e.target.value) })}
+          />
           <input className="input-shell" type="date" value={applicationForm.birthDate} onChange={(e) => setApplicationForm({ ...applicationForm, birthDate: e.target.value })} />
-          <select className="input-shell" value={applicationForm.branchId} onChange={(e) => setApplicationForm({ ...applicationForm, branchId: e.target.value })}>
+          <select
+            className="input-shell"
+            value={applicationForm.branchId || ''}
+            onChange={(e) => setApplicationForm({ ...applicationForm, branchId: e.target.value })}
+            style={{ color: applicationForm.branchId ? '#f8fafc' : '#94a3b8' }}
+          >
+            <option value="" disabled>Branş Seçiniz</option>
             {formClub?.branches.map((branch) => (
               <option key={branch.id} value={branch.id}>{branch.name}</option>
             ))}
           </select>
-          <input className="input-shell" placeholder="Veli Adı Soyadı" value={applicationForm.parentName} onChange={(e) => setApplicationForm({ ...applicationForm, parentName: e.target.value })} />
+          <input
+            className="input-shell"
+            placeholder="Veli Adı Soyadı"
+            value={applicationForm.parentName}
+            onChange={(e) => setApplicationForm({ ...applicationForm, parentName: toTurkishUpper(e.target.value) })}
+          />
           <div className="input-shell flex items-center text-slate-300">{generateUsername(applicationForm.parentName || '') || 'VELİ KULLANICI ADI OTOMATİK OLUŞACAK'}</div>
           <input className="input-shell" placeholder="Veli Telefon" value={applicationForm.parentPhone} onChange={(e) => setApplicationForm({ ...applicationForm, parentPhone: e.target.value })} />
           <div className="relative">
@@ -2196,34 +3979,56 @@ function AppClean() {
 
         <button
           className="primary-btn mt-6 w-full"
-          onClick={() => {
+          onClick={async () => {
             if (!applicationForm.acceptKvkk || !applicationForm.acceptPolicy) {
               alert('KVKK ve muvafakat onayı gereklidir.');
               return;
             }
 
             const generatedUsername = generateUsername(applicationForm.parentName || '');
-            const targetClubId = validPublicFormClubId || getClubById(selectedClubId)?.id || publicFormClubId || clubs[0]?.id;
+            const targetClubId = validPublicFormClubId || publicFormClubId || initialPublicClubId || getClubById(selectedClubId)?.id || null;
             const parentPassword = (applicationForm.parentPassword || '').trim();
+
+            if (!targetClubId) {
+              alert('Kulüp bilgisi bulunamadı. Lütfen URL üzerinden doğru kayıt formunu açın.');
+              return;
+            }
 
             if (!parentPassword) {
               alert('Veli şifresi mutlaka girilmelidir.');
               return;
             }
 
+            if (!applicationForm.branchId) {
+              alert('Lütfen bir branş seçiniz.');
+              return;
+            }
+
+            const finalUsername = generatedUsername || normalizeWhatsappNumber(applicationForm.parentPhone) || `VELI-${Date.now()}`;
             const payload = {
-              id: `app-${Date.now()}`,
-              studentName: `${applicationForm.studentName} ${applicationForm.studentSurname}`,
+              studentName: applicationForm.studentName.trim(),
+              studentSurname: '',
               branchId: applicationForm.branchId,
               parentName: applicationForm.parentName,
               parentPhone: applicationForm.parentPhone,
               parentPassword,
-              username: generatedUsername,
+              username: finalUsername,
               files: ['sağlık_raporu.pdf'],
               status: 'pending',
             };
 
-            setClubs((prev) => prev.map((club) => (club.id === targetClubId ? { ...club, pendingApplications: [payload, ...club.pendingApplications] } : club)));
+            const dbResult = await persistApplicationToSupabase({
+              ...payload,
+              clubId: targetClubId,
+            });
+
+            if (!dbResult.ok) {
+              console.error('Supabase application insert failed.', dbResult.error);
+              alert('Başvuru kaydı veritabanına aktarılırken hata oluştu. Lütfen tekrar deneyiniz.');
+              return;
+            }
+
+            await loadClubs();
 
             const normalizedParentPhone = normalizeWhatsappNumber(applicationForm.parentPhone);
             const parentLoginUsername = generatedUsername || normalizedParentPhone || `VELI-${Date.now()}`;
@@ -2277,11 +4082,22 @@ function AppClean() {
     </div>
   );
 
-  if (!currentUser && !validPublicFormClubId) {
+  if (!currentUser) {
+    if (forcedPublicClubId || isPublicRegistrationRoute || shouldShowPublicForm) {
+      return renderApplicationForm();
+    }
     return renderLoginScreen();
   }
 
-  if (!currentUser && validPublicFormClubId) {
+  if (forcedPublicClubId) {
+    return renderApplicationForm();
+  }
+
+  if (isPublicRegistrationRoute) {
+    return renderApplicationForm();
+  }
+
+  if (shouldShowPublicForm) {
     return renderApplicationForm();
   }
 
@@ -2304,7 +4120,29 @@ function AppClean() {
     'super-admin': renderSuperAdminPanel(),
     'super_admin': renderSuperAdminPanel(),
     'club-manager': renderClubManagerPanel(),
-    coach: renderCoachPanel(),
+    coach: (
+      <CoachPanel
+        currentUser={currentUser}
+        users={users}
+        clubs={clubs}
+        currentClub={currentClub}
+        activeDisplayUser={activeDisplayUser}
+        selectedClubId={selectedClubId}
+        profilePassword={profilePassword}
+        setProfilePassword={setProfilePassword}
+        handlePasswordUpdate={handlePasswordUpdate}
+        handleAttendanceUpdate={handleAttendanceUpdate}
+        sendManagerMessage={sendManagerMessage}
+        coachTab={coachTab}
+        setCoachTab={setCoachTab}
+        coachViewClubId={coachViewClubId}
+        setCoachViewCoachId={setCoachViewCoachId}
+        coachMessageText={coachMessageText}
+        setCoachMessageText={setCoachMessageText}
+        getClubById={getClubById}
+        getStudentBranchIds={getStudentBranchIds}
+      />
+    ),
     parent: renderParentPanel(),
   };
 
@@ -2318,6 +4156,53 @@ function AppClean() {
           {toastMessage}
         </div>
       )}
+      {managerPasswordReset.open && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900 p-5 shadow-2xl shadow-violet-950/30">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-violet-300">Şifre yenile</p>
+                <h3 className="mt-2 text-xl font-bold text-white">
+                  {clubs.find((club) => club.id === managerPasswordReset.clubId)?.name || 'Kulüp'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                className="text-2xl text-slate-300 hover:text-white"
+                onClick={() => setManagerPasswordReset({ open: false, clubId: '', newPassword: '' })}
+              >
+                ×
+              </button>
+            </div>
+
+            <label className="mb-2 block text-sm text-slate-300">Yeni kulüp yöneticisi şifresi</label>
+            <input
+              type="password"
+              className="input-shell w-full"
+              placeholder="Yeni şifre"
+              value={managerPasswordReset.newPassword}
+              onChange={(e) => setManagerPasswordReset((prev) => ({ ...prev, newPassword: e.target.value }))}
+            />
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => setManagerPasswordReset({ open: false, clubId: '', newPassword: '' })}
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={() => handleResetClubManagerPassword(managerPasswordReset.clubId, managerPasswordReset.newPassword)}
+              >
+                Şifreyi Güncelle
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="min-h-screen bg-slate-950 px-4 py-6 text-white">
         <div className="mx-auto max-w-7xl">
           <header className="mb-6 flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-4 md:flex-row md:items-center md:justify-between">
@@ -2326,20 +4211,52 @@ function AppClean() {
               <h1 className="text-2xl font-bold text-white">{panelRole === 'super-admin' || panelRole === 'super_admin' ? 'Süper Admin' : activeDisplayUser?.name || currentUser?.name}</h1>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              {isSuperAdminRole(currentUser?.role) && (
-                <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-950/70 p-1">
-                  {['super-admin', 'club-manager', 'coach', 'parent'].map((role) => (
-                    <button
-                      key={role}
-                      className={`rounded-xl px-3 py-2 text-sm font-semibold ${activeRole === role ? 'bg-gradient-to-r from-violet-600 to-orange-500 text-white' : 'bg-slate-950/80 text-slate-300'}`}
-                      onClick={() => switchRoleView(role)}
-                    >
-                      {roleLabelMap[role]}
-                    </button>
-                  ))}
-                </div>
+              {isSuperAdminRole(currentUser?.role) ? (
+                <>
+                  {activeRole === 'club-manager' && clubs.length > 0 && (
+                    <label className="flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950/70 px-3 py-2">
+                      <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Kulüp</span>
+                      <select
+                        className="input-shell min-w-[220px] border-0 bg-transparent px-0 py-0 text-sm text-white"
+                        value={selectedClubId || ''}
+                        onChange={(e) => setSelectedClubId(e.target.value)}
+                      >
+                        {clubs.map((club) => (
+                          <option key={club.id} value={club.id}>{club.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-950/70 p-1">
+                    {['super-admin', 'club-manager', 'coach', 'parent'].map((role) => (
+                      <button
+                        key={role}
+                        className={`rounded-xl px-3 py-2 text-sm font-semibold ${activeRole === role ? 'bg-gradient-to-r from-violet-600 to-orange-500 text-white' : 'bg-slate-950/80 text-slate-300'}`}
+                        onClick={() => switchRoleView(role)}
+                      >
+                        {roleLabelMap[role]}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <label className="flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950/70 px-3 py-2">
+                  <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Kulüp</span>
+                  <select
+                    className="input-shell min-w-[220px] border-0 bg-transparent px-0 py-0 text-sm text-white opacity-100"
+                    value={selectedClubId || currentUser?.clubId || ''}
+                    onChange={() => {}}
+                    disabled
+                  >
+                    {clubs
+                      .filter((club) => club.id === (currentUser?.clubId || selectedClubId))
+                      .map((club) => (
+                        <option key={club.id} value={club.id}>{club.name}</option>
+                      ))}
+                  </select>
+                </label>
               )}
-              <button className="secondary-btn" onClick={() => setCurrentUser(null)}>Çıkış</button>
+              <button className="secondary-btn" onClick={handleLogout}>Çıkış</button>
             </div>
           </header>
 

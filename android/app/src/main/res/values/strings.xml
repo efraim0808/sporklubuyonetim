@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Spor Kulubu Yonetim Sistemi</string>
+    <string name="title_activity_main">Spor Kulubu Yonetim Sistemi</string>
+    <string name="package_name">com.sporklubu.yonetim</string>
+    <string name="custom_url_scheme">com.sporklubu.yonetim</string>
+</resources>
