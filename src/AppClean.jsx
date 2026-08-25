@@ -680,6 +680,51 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   useEffect(() => {
+    if (!supabase || !supabase.channel) return undefined;
+
+    const subscribedTables = ['clubs', 'club_branches', 'club_students', 'club_coaches', 'club_applications', 'club_announcements', 'club_messages', 'club_notifications', 'profiles'];
+    const realtimeChannel = supabase.channel('sporthub-club-realtime', {
+      config: {
+        broadcast: { self: false },
+        presence: { key: 'club-panel' },
+      },
+    });
+
+    subscribedTables.forEach((tableName) => {
+      realtimeChannel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: tableName },
+        async () => {
+          try {
+            await loadClubs();
+          } catch (error) {
+            console.error(`Realtime refresh failed for ${tableName}:`, error);
+          }
+        }
+      );
+    });
+
+    const subscription = realtimeChannel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        console.info('Supabase Realtime subscribed for club management tables.');
+      }
+    });
+
+    return () => {
+      if (subscription && typeof subscription.unsubscribe === 'function') {
+        subscription.unsubscribe().catch((error) => {
+          console.warn('Realtime unsubscribe failed:', error);
+        });
+      }
+      if (realtimeChannel && typeof realtimeChannel.unsubscribe === 'function') {
+        realtimeChannel.unsubscribe().catch((error) => {
+          console.warn('Realtime channel unsubscribe failed:', error);
+        });
+      }
+    };
+  }, [publicFormClubId, initialPublicClubId, selectedClubId]);
+
+  useEffect(() => {
     let isMounted = true;
 
     const runLoadClubs = async () => {
