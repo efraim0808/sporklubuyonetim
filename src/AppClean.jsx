@@ -356,6 +356,83 @@ function normalizeWhatsappNumber(value) {
   return withTurkeyCode.replace(/^90\+/, '90').replace(/^\+/, '');
 }
 
+function normalizeDuplicateText(value) {
+  return String(value ?? '')
+    .trim()
+    .toLocaleLowerCase('tr-TR')
+    .replace(/\s+/g, '');
+}
+
+async function checkDuplicateRegistrationInSupabase({ clubId, studentName, parentName, parentPhone, username }) {
+  const safeClubId = normalizeDbClubId(clubId);
+  if (!safeClubId) {
+    return { ok: true };
+  }
+
+  if (!supabase || !supabase.from) {
+    return { ok: true };
+  }
+
+  const normalizedStudentName = String(studentName ?? '').trim();
+  const normalizedParentName = String(parentName ?? '').trim();
+  const normalizedParentPhone = normalizeWhatsappNumber(parentPhone);
+  const normalizedUsername = String(username ?? '').trim();
+
+  if (!normalizedStudentName && !normalizedParentName && !normalizedParentPhone && !normalizedUsername) {
+    return { ok: true };
+  }
+
+  const [studentResult, profileResult] = await Promise.all([
+    supabase
+      .from('club_students')
+      .select('id, club_id, full_name, parent_name, parent_phone')
+      .eq('club_id', safeClubId),
+    supabase
+      .from('profiles')
+      .select('id, club_id, full_name, username, phone, role')
+      .eq('club_id', safeClubId),
+  ]);
+
+  if (studentResult.error) {
+    console.error('Supabase duplicate student check failed:', studentResult.error);
+  }
+
+  if (profileResult.error) {
+    console.error('Supabase duplicate profile check failed:', profileResult.error);
+  }
+
+  const isDuplicateRecord = (record) => {
+    if (!record || typeof record !== 'object') return false;
+
+    const studentMatch = normalizedStudentName && normalizeDuplicateText(record.full_name ?? record.student_name ?? '') === normalizeDuplicateText(normalizedStudentName);
+    const parentNameMatch = normalizedParentName && normalizeDuplicateText(record.parent_name ?? record.full_name ?? '') === normalizeDuplicateText(normalizedParentName);
+    const parentPhoneMatch = normalizedParentPhone && normalizeDuplicateText(normalizeWhatsappNumber(record.parent_phone ?? record.phone ?? '')) === normalizeDuplicateText(normalizedParentPhone);
+    const usernameMatch = normalizedUsername && normalizeDuplicateText(record.username ?? '') === normalizeDuplicateText(normalizedUsername);
+
+    return Boolean(studentMatch || parentNameMatch || parentPhoneMatch || usernameMatch);
+  };
+
+  const duplicateStudent = (studentResult.data ?? []).find(isDuplicateRecord);
+  if (duplicateStudent) {
+    return {
+      ok: false,
+      duplicate: true,
+      error: new Error('Bu öğrenci veya veli bu kulüpte zaten kayıtlı!'),
+    };
+  }
+
+  const duplicateProfile = (profileResult.data ?? []).find(isDuplicateRecord);
+  if (duplicateProfile) {
+    return {
+      ok: false,
+      duplicate: true,
+      error: new Error('Bu öğrenci veya veli bu kulüpte zaten kayıtlı!'),
+    };
+  }
+
+  return { ok: true };
+}
+
 function formatWhatsappDisplay(value) {
   const sanitized = normalizeWhatsappNumber(value);
   if (!sanitized) return '';
@@ -1305,6 +1382,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     if (!insertStudentResult.ok) {
       console.error('Supabase student insert failed.', insertStudentResult.error);
+      if (insertStudentResult.duplicate) {
+        const duplicateMessage = 'Bu öğrenci veya veli bu kulüpte zaten kayıtlı!';
+        setToastMessage(duplicateMessage);
+        alert(duplicateMessage);
+        return;
+      }
       alert('Öğrenci kaydı veritabanına gönderilemedi.');
       return;
     }
@@ -1440,7 +1523,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ];
     });
 
-    setToastMessage('Başvuru onaylandı ve öğrenci aktif hale getirildi.');
+    setToastMessage('Kayıt başarıyla alındı!');
   };
 
   const handleAssignStudentToBranch = (studentId, branchId) => {
@@ -2331,6 +2414,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
                     if (!dbResult.ok) {
                       console.error('Supabase manager application insert failed.', dbResult.error);
+                      if (dbResult.duplicate) {
+                        const duplicateMessage = 'Bu öğrenci veya veli bu kulüpte zaten kayıtlı!';
+                        setToastMessage(duplicateMessage);
+                        alert(duplicateMessage);
+                        return;
+                      }
                       alert('Online kayıt veritabanına gönderilemedi.');
                       return;
                     }
@@ -2356,7 +2445,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
                     await loadClubs();
                     setApplicationForm(defaultForm);
-                    setToastMessage('Online kayıt formu başarıyla gönderildi.');
+                    setToastMessage('Kayıt başarıyla alındı!');
                   }}
                 >
                   Başvuruyu Gönder
@@ -3808,6 +3897,22 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return { ok: false, error: new Error('Eksik kayıt alanları.') };
     }
 
+    const duplicateCheck = await checkDuplicateRegistrationInSupabase({
+      clubId: record.club_id,
+      studentName: record.student_name,
+      parentName: record.parent_name,
+      parentPhone: record.parent_phone,
+      username: String(payload.username || '').trim(),
+    });
+
+    if (!duplicateCheck.ok) {
+      return {
+        ok: false,
+        duplicate: true,
+        error: duplicateCheck.error || new Error('Bu öğrenci veya veli bu kulüpte zaten kayıtlı!'),
+      };
+    }
+
     return insertIntoSupabase('club_applications', [record]);
   };
 
@@ -3829,6 +3934,21 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     if (!record.full_name || !record.club_id) {
       return { ok: false, error: new Error('Öğrenci kaydı için gerekli alanlar eksik.') };
+    }
+
+    const duplicateCheck = await checkDuplicateRegistrationInSupabase({
+      clubId: record.club_id,
+      studentName: record.full_name,
+      parentName: record.parent_name,
+      parentPhone: record.parent_phone,
+    });
+
+    if (!duplicateCheck.ok) {
+      return {
+        ok: false,
+        duplicate: true,
+        error: duplicateCheck.error || new Error('Bu öğrenci veya veli bu kulüpte zaten kayıtlı!'),
+      };
     }
 
     return insertIntoSupabase('club_students', [record]);
@@ -4024,6 +4144,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
             if (!dbResult.ok) {
               console.error('Supabase application insert failed.', dbResult.error);
+              if (dbResult.duplicate) {
+                const duplicateMessage = 'Bu öğrenci veya veli bu kulüpte zaten kayıtlı!';
+                setToastMessage(duplicateMessage);
+                alert(duplicateMessage);
+                return;
+              }
               alert('Başvuru kaydı veritabanına aktarılırken hata oluştu. Lütfen tekrar deneyiniz.');
               return;
             }
@@ -4073,7 +4199,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
             setApplicationForm(defaultForm);
             setPublicFormClubId(validPublicFormClubId || targetClubId || null);
             setSelectedClubId(targetClubId);
-            alert('Başvurunuz başarıyla alındı ve yönetici onayına gönderildi.');
+            setToastMessage('Kayıt başarıyla alındı!');
+            alert('Kayıt başarıyla alındı!');
           }}
         >
           Başvuruyu Tamamla

@@ -1,5 +1,8 @@
 {
   "appId": "com.sporklubu.yonetim",
   "appName": "Spor Kulubu Yonetim Sistemi",
-  "webDir": "dist"
+  "webDir": "dist",
+  "server": {
+    "url": "https://sporkulubutys.vercel.app"
+  }
 }
