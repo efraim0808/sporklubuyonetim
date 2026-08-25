@@ -599,6 +599,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [coachTab, setCoachTab] = useState('attendance');
   const [coachViewClubId, setCoachViewClubId] = useState('');
   const [coachViewCoachId, setCoachViewCoachId] = useState('');
+  const [selectedCoachId, setSelectedCoachId] = useState('');
   const [parentMessageText, setParentMessageText] = useState('');
   const [coachMessageText, setCoachMessageText] = useState('');
   const [toastMessage, setToastMessage] = useState('');
@@ -800,21 +801,105 @@ function AppClean({ initialPublicClubId = null } = {}) {
   useEffect(() => {
     if (!coachViewClubId) {
       setCoachViewCoachId('');
+      setSelectedCoachId('');
       return;
     }
 
     const eligibleCoaches = users.filter((user) => user.role === 'coach' && user.clubId === coachViewClubId);
     if (!eligibleCoaches.length) {
       setCoachViewCoachId('');
+      setSelectedCoachId('');
       return;
     }
 
-    const preferredCoachId = currentUser?.role === 'coach' && currentUser.clubId === coachViewClubId ? currentUser.id : eligibleCoaches[0]?.id;
-    const nextCoachId = eligibleCoaches.some((user) => user.id === coachViewCoachId) ? coachViewCoachId : preferredCoachId;
-    if (nextCoachId) {
-      setCoachViewCoachId(nextCoachId);
+    if (!selectedCoachId || !eligibleCoaches.some((user) => user.id === selectedCoachId)) {
+      const preferredCoachId = currentUser?.role === 'coach' && currentUser.clubId === coachViewClubId ? currentUser.id : '';
+      const nextCoachId = preferredCoachId && eligibleCoaches.some((user) => user.id === preferredCoachId)
+        ? preferredCoachId
+        : '';
+
+      if (nextCoachId !== selectedCoachId) {
+        setSelectedCoachId(nextCoachId);
+      }
     }
-  }, [coachViewClubId, users, currentUser]);
+
+    if (selectedCoachId && selectedCoachId !== coachViewCoachId) {
+      setCoachViewCoachId(selectedCoachId);
+    }
+  }, [coachViewClubId, selectedCoachId, users, currentUser]);
+
+  useEffect(() => {
+    if (!supabase || !supabase.from) return undefined;
+
+    let isCancelled = false;
+
+    const loadCoachProfiles = async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .in('role', ['coach', 'ANTRENÖR', 'trainer']);
+
+      if (error) {
+        console.warn('Coach profile refresh failed:', error);
+        return;
+      }
+
+      const normalizedCoaches = (data ?? [])
+        .filter((row) => {
+          const roleValue = String(row.role ?? '').trim().toLowerCase();
+          return roleValue === 'coach' || roleValue === 'antrenör' || roleValue === 'trainer';
+        })
+        .map((row) => {
+          const clubId = row.club_id || selectedClubId || currentUser?.clubId || '';
+          const clubBranches = clubs.find((club) => club.id === clubId)?.branches ?? [];
+          const directBranchName = String(row.branch_name || '').trim();
+          const branchId = row.branch_id || row.branchId || null;
+          const matchedBranchById = clubBranches.find((branch) => branch.id === branchId) ?? null;
+          const matchedBranchByName = directBranchName
+            ? clubBranches.find((branch) => String(branch.name ?? '').trim().toLowerCase() === directBranchName.toLowerCase()) ?? null
+            : null;
+          const resolvedBranch = matchedBranchById ?? matchedBranchByName ?? clubBranches[0] ?? null;
+          const finalBranchId = branchId || resolvedBranch?.id || null;
+          const finalBranchName = directBranchName || resolvedBranch?.name || (clubBranches.length ? clubBranches[0].name : 'Belirtilmemiş');
+
+          return {
+            id: row.id,
+            role: 'coach',
+            name: row.full_name || row.name || row.username || 'Antrenör',
+            username: row.username || '',
+            password: row.password || '',
+            clubId,
+            branchId: finalBranchId,
+            branchName: finalBranchName,
+            phone: row.phone || '',
+            email: row.email || '',
+            isActive: row.is_active !== false,
+          };
+        });
+
+      if (isCancelled || !normalizedCoaches.length) return;
+
+      setUsers((prev) => {
+        const merged = [...prev];
+
+        normalizedCoaches.forEach((coach) => {
+          const index = merged.findIndex((user) => user.id === coach.id || (user.username && coach.username && user.username === coach.username && user.clubId === coach.clubId));
+          if (index >= 0) {
+            merged[index] = { ...merged[index], ...coach };
+          } else {
+            merged.push(coach);
+          }
+        });
+
+        return merged;
+      });
+    };
+
+    loadCoachProfiles();
+    return () => {
+      isCancelled = true;
+    };
+  }, [clubs, selectedClubId, currentUser]);
 
   const resolveClubId = (preferredClubId) => {
     const explicitClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
@@ -1336,6 +1421,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const username = coachForm.username || generateUsername(coachForm.name);
     const id = `coach-${Date.now()}`;
+    const branchName = currentClub?.branches?.find((branch) => branch.id === coachForm.branchId)?.name || 'Belirtilmemiş';
     const coachUser = {
       id,
       role: 'coach',
@@ -1344,6 +1430,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       password: coachForm.password,
       clubId: selectedClubId,
       branchId: coachForm.branchId,
+      branchName,
       isActive: true,
     };
 
@@ -1370,6 +1457,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
       username,
       password: coachForm.password,
       phone: coachForm.phone,
+      branchId: coachForm.branchId,
+      branchName,
       isActive: true,
     });
 
@@ -2313,7 +2402,22 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const availableManagerBranches = currentClub?.branches ?? [];
     const branchStudents = managerSelectedBranchId ? managerStudents.filter((student) => getStudentBranchIds(student).includes(managerSelectedBranchId)) : [];
     const selectedManagerStudent = branchStudents.find((student) => student.id === managerSelectedStudentId) ?? branchStudents[0] ?? null;
-    const managerCoaches = users.filter((user) => user.role === 'coach' && user.clubId === currentClub?.id);
+    const managerCoaches = users.filter((user) => {
+      const roleValue = String(user?.role ?? '').trim().toLowerCase();
+      return user.clubId === currentClub?.id && (roleValue === 'coach' || roleValue === 'antrenör' || roleValue === 'trainer');
+    });
+    const getCoachBranchName = (coach) => {
+      if (!coach) return 'Belirtilmemiş';
+      const branchId = coach?.branchId ?? coach?.branch_id ?? null;
+      const directBranchName = String(coach?.branchName || coach?.branch_name || '').trim();
+      const clubBranches = currentClub?.branches ?? [];
+      const resolvedBranch = clubBranches.find((branch) => branch.id === branchId) ?? null;
+      const matchedByName = directBranchName
+        ? clubBranches.find((branch) => String(branch.name ?? '').trim().toLowerCase() === directBranchName.toLowerCase()) ?? null
+        : null;
+      const fallbackBranch = resolvedBranch ?? matchedByName ?? clubBranches[0] ?? null;
+      return directBranchName || fallbackBranch?.name || (clubBranches.length ? clubBranches[0].name : 'Belirtilmemiş');
+    };
 
     return (
       <div className="space-y-6">
@@ -2579,7 +2683,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
             {managerCoaches.length ? (
               <div className="grid gap-3">
                 {managerCoaches.map((coach) => {
-                  const coachBranch = currentClub?.branches?.find((branch) => branch.id === coach.branchId);
+                  const coachBranch = currentClub?.branches?.find((branch) => branch.id === (coach.branchId ?? coach.branch_id ?? null));
+                  const coachBranchName = getCoachBranchName(coach) || coachBranch?.name || 'Belirtilmemiş';
                   const isCoachActive = coach.isActive !== false;
 
                   return (
@@ -2595,7 +2700,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                       </div>
 
                       <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-200">
-                        Branş: <span className="font-semibold text-violet-300">{coachBranch?.name || 'Belirtilmemiş'}</span>
+                        Branş: <span className="font-semibold text-violet-300">{coachBranchName}</span>
                       </div>
 
                       <div className="mt-4 flex flex-wrap gap-2">
@@ -3047,19 +3152,22 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ?? null;
 
     const coachListForClub = users.filter((user) => user.role === 'coach' && user.clubId === coachClub?.id);
-    const selectedCoach = coachListForClub.find((user) => user.id === coachViewClubId)
+    const selectedCoach = coachListForClub.find((user) => user.id === selectedCoachId)
       ?? coachListForClub.find((user) => user.id === currentUser?.id)
-      ?? coachListForClub[0]
       ?? null;
 
     const validBranchIds = new Set((coachClub?.branches ?? []).map((branch) => branch.id));
     const selectedCoachBranchId = (selectedCoach?.branchId && validBranchIds.has(selectedCoach.branchId))
       ? selectedCoach.branchId
-      : (coachClub?.branches?.[0]?.id ?? '');
-    const selectedCoachBranch = coachClub?.branches?.find((branch) => branch.id === selectedCoachBranchId) ?? coachClub?.branches?.[0] ?? null;
+      : (selectedCoach?.branch_id && validBranchIds.has(selectedCoach.branch_id))
+        ? selectedCoach.branch_id
+        : (selectedCoach?.branchName && coachClub?.branches?.find((branch) => String(branch.name).trim().toLowerCase() === String(selectedCoach.branchName).trim().toLowerCase())?.id)
+          ? coachClub.branches.find((branch) => String(branch.name).trim().toLowerCase() === String(selectedCoach.branchName).trim().toLowerCase())?.id
+          : '';
+    const selectedCoachBranch = coachClub?.branches?.find((branch) => branch.id === selectedCoachBranchId) ?? null;
     const coachStudents = coachClub?.students.filter((student) => getStudentBranchIds(student).includes(selectedCoachBranchId)) ?? [];
     const clubNameForCoach = coachClub?.name || getClubById(currentUser?.clubId)?.name || 'Kulüp';
-    const branchName = selectedCoachBranch?.name || 'Branş';
+    const branchName = String(selectedCoach?.branchName || selectedCoach?.branch_name || selectedCoachBranch?.name || 'Branş').trim() || 'Branş';
     const coachDisplayName = `${selectedCoach?.name || activeDisplayUser?.name || currentUser?.name || 'Antrenör'} - ${clubNameForCoach} (${branchName})`;
     const todayIso = new Date().toISOString().slice(0, 10);
     const presentCount = coachStudents.filter((student) => (student.attendance ?? []).some((entry) => entry.date === todayIso && entry.status === 'present')).length;
@@ -3092,13 +3200,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 value={effectiveCoachClubId}
                 onChange={(event) => {
                   const nextClubId = event.target.value;
-                  setCoachViewCoachId(nextClubId);
-                  const nextCoachList = users.filter((user) => user.role === 'coach' && user.clubId === nextClubId);
-                  if (nextCoachList.length) {
-                    setCoachViewCoachId(nextCoachList[0].id);
-                  } else {
-                    setCoachViewCoachId('');
-                  }
+                  setCoachViewClubId(nextClubId);
+                  setSelectedCoachId('');
+                  setCoachViewCoachId('');
                 }}
               >
                 <option value="">Kulüp Seç</option>
@@ -3112,8 +3216,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Antrenör Seç</span>
               <select
                 className="input-shell"
-                value={selectedCoach?.id ?? ''}
-                onChange={(event) => setCoachViewCoachId(event.target.value)}
+                value={selectedCoachId || ''}
+                onChange={(event) => {
+                  const nextCoachId = event.target.value;
+                  setSelectedCoachId(nextCoachId);
+                  setCoachViewCoachId(nextCoachId);
+                }}
                 disabled={!effectiveCoachClubId || coachListForClub.length === 0}
               >
                 <option value="">Antrenör Seç</option>
@@ -3849,7 +3957,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return insertIntoSupabase('clubs', [record]);
   };
 
-  const persistProfileToSupabase = async ({ clubId, role, fullName, username, password, phone, isActive = true }) => {
+  const persistProfileToSupabase = async ({ clubId, role, fullName, username, password, phone, isActive = true, branchId = null, branchName = '' }) => {
+    const safeBranchId = normalizeDbBranchId(branchId);
+    const safeBranchName = String(branchName || '').trim();
     const record = {
       club_id: normalizeDbClubId(clubId),
       role: String(role || 'parent').trim(),
@@ -3859,6 +3969,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
       email: `${String(username || fullName || 'user').trim().toLowerCase().replace(/\s+/g, '.')}@local.invalid`,
       phone: String(phone || '').trim() || null,
       is_active: Boolean(isActive),
+      ...(safeBranchId ? { branch_id: safeBranchId } : {}),
+      ...(safeBranchName ? { branch_name: safeBranchName } : {}),
       created_at: new Date().toISOString(),
     };
 

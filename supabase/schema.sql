@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS profiles (
   password TEXT,
   email TEXT,
   phone TEXT,
+  branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
+  branch_name TEXT,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
