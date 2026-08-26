@@ -304,6 +304,51 @@ function normalizeMessageRecord(message) {
   };
 }
 
+function normalizeStudentRecord(student) {
+  if (!student || typeof student !== 'object') return null;
+
+  const branchIds = Array.isArray(student.branch_ids)
+    ? student.branch_ids.filter(Boolean)
+    : student.branch_id
+      ? [student.branch_id]
+      : [];
+  const branchStatus = student.branch_status && typeof student.branch_status === 'object' ? student.branch_status : {};
+
+  return {
+    ...student,
+    id: student.id,
+    clubId: student.club_id ?? student.clubId ?? '',
+    name: student.full_name ?? student.name ?? '',
+    parentName: student.parent_name ?? student.parentName ?? '',
+    parentPhone: student.parent_phone ?? student.parentPhone ?? '',
+    branchId: student.branch_id ?? student.branchId ?? (branchIds[0] ?? ''),
+    branchIds,
+    status: student.status ?? 'active',
+    branchStatus,
+    attendance: Array.isArray(student.attendance) ? student.attendance : [],
+    birthDate: student.birth_date ?? student.birthDate ?? '',
+    startedAt: student.started_at ?? student.startedAt ?? '',
+    createdAt: student.created_at ?? student.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function normalizeCoachRecord(coach) {
+  if (!coach || typeof coach !== 'object') return null;
+
+  return {
+    ...coach,
+    id: coach.id,
+    role: 'coach',
+    name: coach.name ?? coach.full_name ?? coach.username ?? 'Antrenör',
+    username: coach.username ?? '',
+    password: coach.password ?? '',
+    clubId: coach.club_id ?? coach.clubId ?? '',
+    branchId: coach.branch_id ?? coach.branchId ?? '',
+    phone: coach.phone ?? '',
+    isActive: coach.is_active !== false,
+  };
+}
+
 async function fetchAllClubsFromSupabase() {
   if (!supabase || !supabase.from) {
     console.warn('Supabase fetch skipped for clubs: client unavailable.');
@@ -322,7 +367,7 @@ async function fetchAllClubsFromSupabase() {
 
   const clubIds = (clubsData ?? []).map((club) => club.id).filter(Boolean);
 
-  const [{ data: branchRows, error: branchError }, { data: applicationRows, error: applicationError }, { data: messageRows, error: messageError }] = await Promise.all([
+  const [{ data: branchRows, error: branchError }, { data: applicationRows, error: applicationError }, { data: messageRows, error: messageError }, { data: studentRows, error: studentError }, { data: coachRows, error: coachError }] = await Promise.all([
     clubIds.length
       ? supabase.from('club_branches').select('*').in('club_id', clubIds)
       : Promise.resolve({ data: [], error: null }),
@@ -331,6 +376,12 @@ async function fetchAllClubsFromSupabase() {
       : Promise.resolve({ data: [], error: null }),
     clubIds.length
       ? supabase.from('club_messages').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    clubIds.length
+      ? supabase.from('club_students').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    clubIds.length
+      ? supabase.from('club_coaches').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
       : Promise.resolve({ data: [], error: null }),
   ]);
 
@@ -344,6 +395,14 @@ async function fetchAllClubsFromSupabase() {
 
   if (messageError) {
     console.error('Supabase club_messages fetch failed:', messageError);
+  }
+
+  if (studentError) {
+    console.error('Supabase club_students fetch failed:', studentError);
+  }
+
+  if (coachError) {
+    console.error('Supabase club_coaches fetch failed:', coachError);
   }
 
   const branchesByClubId = {};
@@ -360,6 +419,26 @@ async function fetchAllClubsFromSupabase() {
       ...branch,
     });
     branchesByClubId[branch.club_id] = nextList;
+  });
+
+  const studentsByClubId = {};
+  (studentRows ?? []).forEach((student) => {
+    if (!student?.club_id) return;
+    const normalized = normalizeStudentRecord(student);
+    if (!normalized) return;
+    const nextList = studentsByClubId[student.club_id] ?? [];
+    nextList.push(normalized);
+    studentsByClubId[student.club_id] = nextList;
+  });
+
+  const coachesByClubId = {};
+  (coachRows ?? []).forEach((coach) => {
+    if (!coach?.club_id) return;
+    const normalized = normalizeCoachRecord(coach);
+    if (!normalized) return;
+    const nextList = coachesByClubId[coach.club_id] ?? [];
+    nextList.push(normalized);
+    coachesByClubId[coach.club_id] = nextList;
   });
 
   const applicationsByClubId = {};
@@ -395,6 +474,8 @@ async function fetchAllClubsFromSupabase() {
           monthlyFee: Number(branch.monthlyFee ?? branch.monthly_fee ?? branch.fee ?? 0),
           coachIds: Array.isArray(branch.coachIds) ? branch.coachIds : [],
         })),
+        students: studentsByClubId[club.id] ?? [],
+        coaches: coachesByClubId[club.id] ?? [],
         pendingApplications: applicationsByClubId[club.id] ?? [],
         incomingMessages: messagesByClubId[club.id] ?? [],
       };
@@ -444,6 +525,14 @@ function normalizeDuplicateText(value) {
     .trim()
     .toLocaleLowerCase('tr-TR')
     .replace(/\s+/g, '');
+}
+
+function normalizeCoachIdentity({ name, username, branchId }) {
+  return {
+    name: normalizeDuplicateText(name),
+    username: normalizeDuplicateText(username),
+    branchId: normalizeDbBranchId(branchId) || '',
+  };
 }
 
 async function checkDuplicateRegistrationInSupabase({ clubId, studentName, parentName, parentPhone, username }) {
@@ -1772,6 +1861,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return;
     }
 
+    const persistedStudentId = insertStudentResult.data?.[0]?.id || insertStudentResult.data?.[0]?.student_id || null;
+
     const deleteApplicationResult = await deleteFromSupabase('club_applications', 'id', appId);
     if (!deleteApplicationResult.ok) {
       console.error('handleApproveApplication: club_applications delete failed.', {
@@ -1806,7 +1897,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return;
     }
 
-    const generatedStudentId = `student-${Date.now()}`;
+    const generatedStudentId = persistedStudentId || `student-${Date.now()}`;
     const selectedBranch = club.branches.find((branch) => branch.id === application.branchId);
     const branchFee = Number(selectedBranch?.monthlyFee ?? selectedBranch?.fee ?? 0);
     const monthLabel = new Date().toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase());
@@ -4291,12 +4382,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const persistCoachToSupabase = async ({ clubId, name, username, password, phone, branchId }) => {
     const safeClubId = normalizeDbClubId(clubId || selectedClubId);
     const safeBranchId = normalizeDbBranchId(branchId);
+    const normalizedName = String(name || '').trim();
+    const normalizedUsername = String(username || '').trim();
+    const normalizedPhone = String(phone || '').trim();
     const record = {
       club_id: safeClubId,
-      name: String(name || '').trim(),
-      username: String(username || '').trim(),
+      name: normalizedName,
+      username: normalizedUsername,
       password: String(password || '').trim(),
-      phone: String(phone || '').trim() || null,
+      phone: normalizedPhone || null,
       branch_id: safeBranchId,
       is_active: true,
       created_at: new Date().toISOString(),
@@ -4304,6 +4398,46 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     if (!record.club_id || !record.name || !record.username || !record.branch_id) {
       return { ok: false, error: new Error('Antrenör için geçerli bir kulüp ve branş seçimi zorunludur.') };
+    }
+
+    const identity = normalizeCoachIdentity({
+      name: record.name,
+      username: record.username,
+      branchId: record.branch_id,
+    });
+
+    if (supabase && supabase.from) {
+      const { data: existingCoaches, error: duplicateError } = await supabase
+        .from('club_coaches')
+        .select('id, name, username, phone, branch_id')
+        .eq('club_id', safeClubId)
+        .eq('branch_id', safeBranchId);
+
+      if (duplicateError) {
+        console.error('Coach duplicate lookup failed:', duplicateError);
+      }
+
+      const coachAlreadyExists = (existingCoaches ?? []).some((existingCoach) => {
+        const sameIdentity = normalizeCoachIdentity({
+          name: existingCoach?.name ?? '',
+          username: existingCoach?.username ?? '',
+          branchId: existingCoach?.branch_id ?? '',
+        });
+        const sameName = sameIdentity.name === identity.name;
+        const sameUsername = sameIdentity.username === identity.username;
+        const normalizedExistingPhone = normalizeWhatsappNumber(existingCoach?.phone ?? '');
+        const normalizedNewPhone = normalizeWhatsappNumber(record.phone ?? '');
+        const samePhone = normalizedExistingPhone && normalizedNewPhone && normalizedExistingPhone === normalizedNewPhone;
+        return sameName && sameUsername && (samePhone || !normalizedNewPhone || !normalizedExistingPhone || !existingCoach?.phone);
+      });
+
+      if (coachAlreadyExists) {
+        return {
+          ok: false,
+          duplicate: true,
+          error: new Error('Aynı kulüp ve branş için bu antrenör kaydı zaten mevcut.'),
+        };
+      }
     }
 
     return insertIntoSupabase('club_coaches', [record]);
@@ -4450,7 +4584,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
     });
     const safePassword = parentCredentials.password;
     const generatedUsername = parentCredentials.username;
-    const email = generatedUsername ? `${generatedUsername.toLowerCase()}@local.invalid` : null;
     const record = {
       club_id: normalizeDbClubId(clubId),
       role: 'parent',
@@ -4465,35 +4598,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     if (!record.club_id || !record.full_name) {
       return { ok: false, error: new Error('Veli kaydı için kulüp ve ad gerekli.') };
-    }
-
-    if (supabase && supabase.auth && typeof supabase.auth.signUp === 'function') {
-      try {
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-          email,
-          password: safePassword,
-          phone: String(phone || '').trim() || undefined,
-          options: {
-            data: {
-              club_id: record.club_id,
-              full_name: record.full_name,
-              username: record.username,
-              role: 'parent',
-            },
-          },
-        });
-
-        const authUserId = authData?.user?.id ?? null;
-        if (authError && !authError.message?.toLowerCase().includes('already')) {
-          console.warn('Supabase auth parent signup failed, falling back to profile insert only:', authError);
-        }
-
-        if (authUserId) {
-          record.auth_user_id = authUserId;
-        }
-      } catch (error) {
-        console.warn('Supabase auth parent signup threw unexpectedly, continuing with profile insert:', error);
-      }
     }
 
     return insertIntoSupabase('profiles', [record]);

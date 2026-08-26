@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS club_coaches (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS ux_club_coaches_identity
+  ON public.club_coaches (
+    club_id,
+    COALESCE(branch_id::text, '00000000-0000-0000-0000-000000000000'),
+    LOWER(TRIM(name)),
+    LOWER(TRIM(username))
+  );
+
 CREATE TABLE IF NOT EXISTS club_students (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
@@ -112,7 +120,7 @@ CREATE TABLE IF NOT EXISTS club_messages (
   club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
   sender_name TEXT NOT NULL,
   sender_role TEXT NOT NULL,
-  student_id UUID,
+  student_id UUID REFERENCES club_students(id) ON DELETE SET NULL,
   student_name TEXT,
   message TEXT NOT NULL,
   read BOOLEAN NOT NULL DEFAULT false,
@@ -165,6 +173,22 @@ CREATE POLICY "club_announcements_all_access" ON club_announcements FOR ALL USIN
 CREATE POLICY "club_notifications_all_access" ON club_notifications FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "club_messages_all_access" ON club_messages FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "club_applications_all_access" ON club_applications FOR ALL USING (true) WITH CHECK (true);
+
+WITH ranked_coaches AS (
+  SELECT id,
+         ROW_NUMBER() OVER (
+           PARTITION BY club_id,
+                        COALESCE(branch_id::text, '00000000-0000-0000-0000-000000000000'),
+                        LOWER(TRIM(name)),
+                        LOWER(TRIM(username))
+           ORDER BY created_at ASC, id ASC
+         ) AS row_num
+  FROM public.club_coaches
+)
+DELETE FROM public.club_coaches c
+USING ranked_coaches r
+WHERE c.id = r.id
+  AND r.row_num > 1;
 
 CREATE OR REPLACE FUNCTION public.reset_app_data()
 RETURNS TABLE(message text)

@@ -13,7 +13,24 @@ TRUNCATE TABLE public.club_messages, public.club_announcements, public.club_paym
   public.club_students, public.club_branches, public.club_coaches,
   public.club_applications, public.clubs RESTART IDENTITY CASCADE;
 
--- 3) Keep the super-admin identity available by restoring a locked root record if it is missing.
+-- 3) Clean duplicate coach rows before re-inserting any data.
+WITH ranked_coaches AS (
+  SELECT id,
+         ROW_NUMBER() OVER (
+           PARTITION BY club_id,
+                        COALESCE(branch_id::text, '00000000-0000-0000-0000-000000000000'),
+                        LOWER(TRIM(name)),
+                        LOWER(TRIM(username))
+           ORDER BY created_at ASC, id ASC
+         ) AS row_num
+  FROM public.club_coaches
+)
+DELETE FROM public.club_coaches c
+USING ranked_coaches r
+WHERE c.id = r.id
+  AND r.row_num > 1;
+
+-- 4) Keep the super-admin identity available by restoring a locked root record if it is missing.
 INSERT INTO public.profiles (id, club_id, role, full_name, username, password, email, phone, is_active, created_at)
 VALUES (
   '00000000-0000-0000-0000-000000000001',
