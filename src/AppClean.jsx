@@ -182,6 +182,24 @@ async function insertIntoSupabase(table, rows, options = {}) {
       delete cleanRow.id;
     }
 
+    if (table === 'club_messages') {
+      const allowedMessageKeys = new Set([
+        'id',
+        'club_id',
+        'sender_name',
+        'sender_role',
+        'student_name',
+        'message',
+        'created_at',
+      ]);
+
+      Object.keys(cleanRow).forEach((key) => {
+        if (!allowedMessageKeys.has(key)) {
+          delete cleanRow[key];
+        }
+      });
+    }
+
     return cleanRow;
   });
 
@@ -802,6 +820,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     name: '',
     parentName: '',
     parentPhone: '',
+    birthDate: '',
     startedAt: '',
   });
   const [attendanceCalendar, setAttendanceCalendar] = useState({ studentId: null, month: new Date().toISOString().slice(0, 7) });
@@ -811,8 +830,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [coachViewClubId, setCoachViewClubId] = useState('');
   const [coachViewCoachId, setCoachViewCoachId] = useState('');
   const [selectedCoachId, setSelectedCoachId] = useState('');
-  const [parentMessageText, setParentMessageText] = useState('');
-  const [coachMessageText, setCoachMessageText] = useState('');
+  const [parentFilterClubId, setParentFilterClubId] = useState('');
+  const [parentFilterBranchId, setParentFilterBranchId] = useState('');
+  const [parentFilterStudentId, setParentFilterStudentId] = useState('');
   const [toastMessage, setToastMessage] = useState('');
   const [managerPasswordReset, setManagerPasswordReset] = useState({ open: false, clubId: '', newPassword: '' });
   const [publicFormClubId, setPublicFormClubId] = useState(() => {
@@ -1048,23 +1068,54 @@ function AppClean({ initialPublicClubId = null } = {}) {
       const activeClubId = normalizeDbClubId(selectedClubId || currentUser?.clubId || clubs[0]?.id || '');
 
       try {
-        let query = supabase
+        let profileQuery = supabase
           .from('profiles')
           .select('*')
           .in('role', ['coach', 'ANTRENÖR', 'trainer']);
 
         if (activeClubId) {
-          query = query.eq('club_id', activeClubId);
+          profileQuery = profileQuery.eq('club_id', activeClubId);
         }
 
-        const { data, error } = await query;
-
-        if (error) {
-          console.warn('Coach profile refresh failed:', error, { activeClubId, selectedClubId, currentUserClubId: currentUser?.clubId });
+        const { data: profileRows, error: profileError } = await profileQuery;
+        if (profileError) {
+          console.warn('Coach profile refresh failed:', profileError, { activeClubId, selectedClubId, currentUserClubId: currentUser?.clubId });
           return;
         }
 
-        const normalizedCoaches = (data ?? [])
+        const coachRowsResult = await supabase
+          .from('club_coaches')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (coachRowsResult.error) {
+          console.warn('Coach assignment refresh failed:', coachRowsResult.error);
+        }
+
+        const coachRows = coachRowsResult.data ?? [];
+        const coachAssignmentByClubAndUser = {};
+
+        coachRows.forEach((row) => {
+          if (!row?.club_id) return;
+          const clubKey = String(row.club_id);
+          const userIdentityKeys = [
+            String(row.username ?? '').trim().toLowerCase(),
+            String(row.name ?? '').trim().toLowerCase(),
+          ].filter(Boolean);
+
+          if (!userIdentityKeys.length) return;
+
+          if (!coachAssignmentByClubAndUser[clubKey]) {
+            coachAssignmentByClubAndUser[clubKey] = [];
+          }
+
+          coachAssignmentByClubAndUser[clubKey].push({
+            ...row,
+            identityKeys: userIdentityKeys,
+          });
+        });
+
+        const normalizedCoaches = (profileRows ?? [])
           .filter((row) => {
             const roleValue = String(row.role ?? '').trim().toLowerCase();
             return roleValue === 'coach' || roleValue === 'antrenör' || roleValue === 'trainer';
@@ -1072,30 +1123,35 @@ function AppClean({ initialPublicClubId = null } = {}) {
           .map((row) => {
             const clubId = normalizeDbClubId(row.club_id || selectedClubId || currentUser?.clubId || clubs[0]?.id || '') || row.club_id || selectedClubId || currentUser?.clubId || clubs[0]?.id || '';
             const clubBranches = clubs.find((club) => club.id === clubId)?.branches ?? [];
-          const directBranchName = String(row.branch_name || '').trim();
-          const branchId = row.branch_id || row.branchId || null;
-          const matchedBranchById = clubBranches.find((branch) => branch.id === branchId) ?? null;
-          const matchedBranchByName = directBranchName
-            ? clubBranches.find((branch) => String(branch.name ?? '').trim().toLowerCase() === directBranchName.toLowerCase()) ?? null
-            : null;
-          const resolvedBranch = matchedBranchById ?? matchedBranchByName ?? clubBranches[0] ?? null;
-          const finalBranchId = branchId || resolvedBranch?.id || null;
-          const finalBranchName = directBranchName || resolvedBranch?.name || (clubBranches.length ? clubBranches[0].name : 'Belirtilmemiş');
+            const directBranchName = String(row.branch_name || '').trim();
+            const matchingCoachAssignment = (coachAssignmentByClubAndUser[String(clubId)] ?? []).find((assignment) => {
+              const usernameMatch = normalizeLoginUsername(assignment.username || '') === normalizeLoginUsername(row.username || '');
+              const nameMatch = normalizeDuplicateText(assignment.name || '') === normalizeDuplicateText(row.full_name || row.name || '');
+              return usernameMatch || nameMatch;
+            });
+            const branchId = matchingCoachAssignment?.branch_id || row.branch_id || row.branchId || null;
+            const matchedBranchById = clubBranches.find((branch) => branch.id === branchId) ?? null;
+            const matchedBranchByName = directBranchName
+              ? clubBranches.find((branch) => String(branch.name ?? '').trim().toLowerCase() === directBranchName.toLowerCase()) ?? null
+              : null;
+            const resolvedBranch = matchedBranchById ?? matchedBranchByName ?? clubBranches[0] ?? null;
+            const finalBranchId = branchId || resolvedBranch?.id || null;
+            const finalBranchName = directBranchName || resolvedBranch?.name || (clubBranches.length ? clubBranches[0].name : 'Belirtilmemiş');
 
-          return {
-            id: row.id,
-            role: 'coach',
-            name: row.full_name || row.name || row.username || 'Antrenör',
-            username: row.username || '',
-            password: row.password || '',
-            clubId,
-            branchId: finalBranchId,
-            branchName: finalBranchName,
-            phone: row.phone || '',
-            email: row.email || '',
-            isActive: row.is_active !== false,
-          };
-        });
+            return {
+              id: row.id,
+              role: 'coach',
+              name: row.full_name || row.name || row.username || 'Antrenör',
+              username: row.username || '',
+              password: row.password || '',
+              clubId,
+              branchId: finalBranchId,
+              branchName: finalBranchName,
+              phone: row.phone || '',
+              email: row.email || '',
+              isActive: row.is_active !== false,
+            };
+          });
 
         if (isCancelled || !normalizedCoaches.length) return;
 
@@ -1445,7 +1501,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const handleResetAppData = async () => {
-    const confirmed = window.confirm('Uyarı: Bu işlem sadece kulüp bazlı verileri sıfırlar. Süper Admin hesabı korunur; kulüp, branş, antrenör, başvuru ve öğrenci verileri temizlenir. Devam etmek istiyor musunuz?');
+    const confirmed = window.confirm('Uyarı: Bu işlem sadece kulüp bazlı verileri sıfırlar. Süper Admin hesabı korunur; kulüp, branş, antrenör, başvuru, öğrenci ve diğer yönetici olmayan profil verileri temizlenir. Devam etmek istiyor musunuz?');
     if (!confirmed) return;
 
     try {
@@ -1453,7 +1509,31 @@ function AppClean({ initialPublicClubId = null } = {}) {
         throw new Error('Supabase bağlantısı mevcut değil.');
       }
 
-      // Safety: the locked super-admin profile remains untouched.
+      const deleteAllRowsExceptZeroId = async (tableName) => {
+        const { error } = await supabase
+          .from(tableName)
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000');
+
+        if (error) {
+          console.error(`App reset failed for table: ${tableName}`, error);
+          throw error;
+        }
+      };
+
+      const deleteNonSuperAdminProfiles = async () => {
+        const { error } = await supabase
+          .from('profiles')
+          .delete()
+          .neq('role', 'super_admin')
+          .neq('role', 'super-admin');
+
+        if (error) {
+          console.error('App reset failed for profiles table:', error);
+          throw error;
+        }
+      };
+
       const tablesToReset = [
         'club_applications',
         'club_students',
@@ -1463,16 +1543,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ];
 
       for (const tableName of tablesToReset) {
-        const { error } = await supabase
-          .from(tableName)
-          .delete()
-          .neq('id', '');
-
-        if (error) {
-          console.error(`App reset failed for table: ${tableName}`, error);
-          throw error;
-        }
+        await deleteAllRowsExceptZeroId(tableName);
       }
+
+      await deleteNonSuperAdminProfiles();
 
       setCurrentUser({ ...lockedSuperAdminUser, role: 'super-admin', isActive: true });
       setActiveRole('super-admin');
@@ -1493,6 +1567,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
         name: '',
         parentName: '',
         parentPhone: '',
+        birthDate: '',
         startedAt: '',
       });
       setAttendanceCalendar({ studentId: null, month: new Date().toISOString().slice(0, 7) });
@@ -1726,7 +1801,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return;
     }
 
-    const username = coachForm.username || generateUsername(coachForm.name);
+    const username = String(coachForm.username || generateUsername(coachForm.name) || '').trim();
+    if (!username) {
+      alert('Antrenör için geçerli bir kullanıcı adı oluşturulamadı.');
+      return;
+    }
+
     const id = `coach-${Date.now()}`;
     const branchName = currentClub?.branches?.find((branch) => branch.id === validBranchId)?.name || 'Belirtilmemiş';
     const coachUser = {
@@ -1741,8 +1821,47 @@ function AppClean({ initialPublicClubId = null } = {}) {
       isActive: true,
     };
 
-    const coachInsertResult = await persistCoachToSupabase({
+    console.group('Coach create flow');
+    console.log('Step 1: create coach profile in profiles table', {
+      clubId: selectedClubId,
+      role: 'coach',
+      fullName: coachForm.name,
+      username,
+      branchId: validBranchId,
+      branchName,
+    });
+
+    const profileInsertResult = await persistProfileToSupabase({
       id,
+      clubId: selectedClubId,
+      role: 'coach',
+      fullName: coachForm.name,
+      username,
+      password: coachForm.password,
+      phone: coachForm.phone,
+      isActive: true,
+    });
+
+    if (!profileInsertResult.ok) {
+      console.error('Supabase coach profile insert failed.', profileInsertResult.error);
+      alert(profileInsertResult.error?.message || 'Antrenör profili oluşturulamadı.');
+      console.groupEnd();
+      return;
+    }
+
+    const profileId = profileInsertResult.data?.[0]?.id || profileInsertResult.data?.id || id;
+
+    console.log('Step 2: create club_coaches row using saved profile metadata', {
+      profileId,
+      clubId: selectedClubId,
+      branchId: validBranchId,
+      username,
+      name: coachForm.name,
+    });
+
+    const coachInsertResult = await persistCoachToSupabase({
+      id: profileId,
+      profileId,
       clubId: selectedClubId,
       name: coachForm.name,
       username,
@@ -1751,23 +1870,13 @@ function AppClean({ initialPublicClubId = null } = {}) {
       branchId: validBranchId,
     });
     if (!coachInsertResult.ok) {
-      console.error('Supabase coach insert failed.', coachInsertResult.error);
-      alert('Antrenör veritabanına kaydedilemedi.');
+      console.error('Supabase coach insert failed after profile creation.', coachInsertResult.error);
+      alert(coachInsertResult.error?.message || 'Antrenör kulüp kaydı oluşturulamadı.');
+      console.groupEnd();
       return;
     }
 
-    await persistProfileToSupabase({
-      id,
-      clubId: selectedClubId,
-      role: 'coach',
-      fullName: coachForm.name,
-      username,
-      password: coachForm.password,
-      phone: coachForm.phone,
-      branchId: validBranchId,
-      branchName,
-      isActive: true,
-    });
+    console.groupEnd();
 
     setUsers((prev) => [...prev, coachUser]);
     setClubs((prev) =>
@@ -2121,24 +2230,53 @@ function AppClean({ initialPublicClubId = null } = {}) {
     );
   };
 
-  const handleAttendanceUpdate = (studentId, status) => {
+  const handleAttendanceUpdate = async (studentId, status) => {
+    if (!studentId) return;
+
     const today = new Date().toISOString().slice(0, 10);
+    const studentRecord = clubs
+      .flatMap((club) => club.students ?? [])
+      .find((student) => String(student.id) === String(studentId));
+
+    const currentAttendance = Array.isArray(studentRecord?.attendance) ? studentRecord.attendance : [];
+    const nextAttendance = [...currentAttendance];
+    const existingIndex = nextAttendance.findIndex((entry) => entry.date === today);
+
+    if (existingIndex >= 0) {
+      nextAttendance[existingIndex] = { ...nextAttendance[existingIndex], status };
+    } else {
+      nextAttendance.push({ date: today, status });
+    }
+
     setClubs((prev) =>
       prev.map((club) => ({
         ...club,
-        students: club.students.map((student) => {
-          if (student.id !== studentId) return student;
-          const nextAttendance = [...(student.attendance || [])];
-          const existingIndex = nextAttendance.findIndex((entry) => entry.date === today);
-          if (existingIndex >= 0) {
-            nextAttendance[existingIndex] = { ...nextAttendance[existingIndex], status };
-          } else {
-            nextAttendance.push({ date: today, status });
-          }
+        students: (club.students ?? []).map((student) => {
+          if (String(student.id) !== String(studentId)) return student;
           return { ...student, attendance: nextAttendance };
         }),
       }))
     );
+
+    if (!supabase || !supabase.from) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('club_students')
+        .update({ attendance: nextAttendance })
+        .eq('id', studentId)
+        .select();
+
+      if (error) {
+        console.error('Supabase attendance update failed:', error);
+        setToastMessage('Yoklama kaydı güncellenemedi.');
+      }
+    } catch (error) {
+      console.error('Attendance update crashed:', error);
+      setToastMessage('Yoklama kaydı sırasında hata oluştu.');
+    }
   };
 
   const handlePasswordUpdate = () => {
@@ -2363,15 +2501,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
       sender_name: String(senderName || 'Kullanıcı').trim() || 'Kullanıcı',
       sender_role: String(senderRole || 'Veli').trim() || 'Veli',
       message: cleanText,
-      read: false,
     };
 
-    const studentId = normalizeDbStudentId(studentContext.studentId);
     const studentName = String(studentContext.studentName || '').trim();
 
     const payload = {
       ...basePayload,
-      ...(studentId ? { student_id: studentId } : {}),
       ...(studentName ? { student_name: studentName } : {}),
     };
 
@@ -2380,7 +2515,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
       sender_name: basePayload.sender_name,
       sender_role: basePayload.sender_role,
       message: basePayload.message,
-      read: false,
     };
 
     const attemptInsert = async (record) => {
@@ -2402,7 +2536,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       }
     }
 
-    const insertedRecord = (result.data ?? [])[0] ?? { ...basePayload, ...(studentId ? { student_id: studentId } : {}), ...(studentName ? { student_name: studentName } : {}), created_at: new Date().toISOString() };
+    const insertedRecord = (result.data ?? [])[0] ?? { ...basePayload, ...(studentName ? { student_name: studentName } : {}), created_at: new Date().toISOString() };
     const normalizedMessage = normalizeMessageRecord(insertedRecord);
 
     setClubs((prev) =>
@@ -2415,7 +2549,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 senderName: basePayload.sender_name,
                 senderRole: basePayload.sender_role,
                 studentName: studentName || '',
-                studentId: studentId || null,
+                studentId: null,
                 message: cleanText,
                 read: false,
                 sentAt: new Date().toISOString(),
@@ -2430,25 +2564,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const markMessageAsRead = async (messageId) => {
-    if (!messageId) return;
-
-    const { data, error } = await supabase
-      .from('club_messages')
-      .update({ read: true })
-      .eq('id', messageId)
-      .select();
-
-    if (error) {
-      console.error('Supabase message read status update failed:', error);
-      alert('Mesaj okundu olarak işaretlenemedi.');
-      return;
-    }
+    const safeMessageId = normalizeDbRecordId(messageId);
+    if (!safeMessageId) return;
 
     setClubs((prev) =>
       prev.map((club) => ({
         ...club,
         incomingMessages: (club.incomingMessages || []).map((message) =>
-          message.id === messageId ? { ...message, read: true } : message
+          message.id === safeMessageId ? { ...message, read: true } : message
         ),
       }))
     );
@@ -2457,9 +2580,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const deleteMessage = async (messageId) => {
-    if (!messageId) return;
+    const safeMessageId = normalizeDbRecordId(messageId);
+    if (!safeMessageId) return;
 
-    const { error } = await supabase.from('club_messages').delete().eq('id', messageId);
+    const { error } = await supabase.from('club_messages').delete().eq('id', safeMessageId).select();
     if (error) {
       console.error('Supabase message delete failed:', error);
       alert('Mesaj silinemedi.');
@@ -2469,7 +2593,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     setClubs((prev) =>
       prev.map((club) => ({
         ...club,
-        incomingMessages: (club.incomingMessages || []).filter((message) => message.id !== messageId),
+        incomingMessages: (club.incomingMessages || []).filter((message) => message.id !== safeMessageId),
       }))
     );
 
@@ -2546,7 +2670,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
             <div className="space-y-3">
               {filteredClubs.length ? (
-                filteredClubs.map((club) => {
+                filteredClubs.map((club, clubIndex) => {
                   const isExpanded = expandedClubId === club.id;
                   const warning = getSubscriptionWarning(club);
                   const remainingDays = Number.isFinite(new Date(club.subscription.endDate).getTime())
@@ -2568,7 +2692,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   );
 
                   return (
-                    <div key={club.id} className="rounded-2xl border border-slate-700 bg-slate-900/80">
+                    <div key={`${club.id ?? 'club'}-${clubIndex}`} className="rounded-2xl border border-slate-700 bg-slate-900/80">
                       <button
                         type="button"
                         className="flex w-full flex-col gap-2 px-4 py-3 text-left md:flex-row md:items-center md:justify-between"
@@ -2889,7 +3013,18 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   value={applicationForm.studentSurname}
                   onChange={(e) => setApplicationForm({ ...applicationForm, studentSurname: toTurkishUpper(e.target.value) })}
                 />
-                <input className="input-shell" type="date" value={applicationForm.birthDate} onChange={(e) => setApplicationForm({ ...applicationForm, birthDate: e.target.value })} />
+                <label className="space-y-2 text-sm text-slate-300">
+                  <span className="block text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Öğrenci Doğum Tarihi</span>
+                  <input
+                    className="input-shell"
+                    type="date"
+                    value={applicationForm.birthDate}
+                    placeholder="Doğum Tarihi (gg.aa.yyyy)"
+                    title="Öğrenci Doğum Tarihi"
+                    aria-label="Öğrenci Doğum Tarihi"
+                    onChange={(e) => setApplicationForm({ ...applicationForm, birthDate: e.target.value })}
+                  />
+                </label>
                 <select
                   className="input-shell"
                   value={applicationForm.branchId || ''}
@@ -2970,6 +3105,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                     const payload = {
                       studentName: studentNameParts.studentName,
                       studentSurname: studentNameParts.studentSurname,
+                      birthDate: applicationForm.birthDate,
                       branchId: applicationForm.branchId,
                       parentName: applicationForm.parentName,
                       parentPhone: applicationForm.parentPhone,
@@ -3038,8 +3174,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
               </div>
 
               <div className="space-y-3">
-                {currentClub?.branches.map((branch) => (
-                  <div key={branch.id} className="rounded-xl border border-slate-700 bg-slate-900/80 p-3">
+                {currentClub?.branches.map((branch, branchIndex) => (
+                  <div key={`${branch.id ?? 'branch'}-${branchIndex}`} className="rounded-xl border border-slate-700 bg-slate-900/80 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium text-white">{branch.name}</span>
                       <div className="flex items-center gap-2">
@@ -3080,8 +3216,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 <input className="input-shell" placeholder="İletişim" value={coachForm.phone} onChange={(e) => setCoachForm({ ...coachForm, phone: e.target.value })} />
                 <select className="input-shell" value={coachForm.branchId || ''} onChange={(e) => setCoachForm({ ...coachForm, branchId: e.target.value })}>
                   <option value="" disabled>Branş Seçiniz</option>
-                  {currentClub?.branches.map((branch) => (
-                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                  {currentClub?.branches.map((branch, branchIndex) => (
+                    <option key={`${branch.id ?? 'branch-option'}-${branchIndex}`} value={branch.id}>{branch.name}</option>
                   ))}
                 </select>
                 <div className="input-shell flex items-center text-slate-300">{coachForm.username || 'KULLANICI ADI OTOMATİK OLUŞACAK'}</div>
@@ -3106,13 +3242,13 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
             {managerCoaches.length ? (
               <div className="grid gap-3">
-                {managerCoaches.map((coach) => {
+                {managerCoaches.map((coach, coachIndex) => {
                   const coachBranch = currentClub?.branches?.find((branch) => branch.id === (coach.branchId ?? coach.branch_id ?? null));
                   const coachBranchName = getCoachBranchName(coach) || coachBranch?.name || 'Belirtilmemiş';
                   const isCoachActive = coach.isActive !== false;
 
                   return (
-                    <div key={coach.id} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
+                    <div key={`${coach.id ?? coach.username ?? coach.name ?? 'coach'}-${coachIndex}`} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
                       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                         <div>
                           <div className="text-lg font-semibold text-white">{coach.name}</div>
@@ -3266,8 +3402,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 <label className="mb-2 block text-xs uppercase tracking-[0.2em] text-slate-400">Branş</label>
                 <select className="input-shell w-full" value={managerSelectedBranchId} onChange={(e) => { setManagerSelectedBranchId(e.target.value); setManagerSelectedStudentId(''); }}>
                   <option value="">Branş seçin</option>
-                  {availableManagerBranches.map((branch) => (
-                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                  {availableManagerBranches.map((branch, branchIndex) => (
+                    <option key={`${branch.id ?? 'branch-manager'}-${branchIndex}`} value={branch.id}>{branch.name}</option>
                   ))}
                 </select>
               </div>
@@ -3276,8 +3412,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 <label className="mb-2 block text-xs uppercase tracking-[0.2em] text-slate-400">Öğrenci</label>
                 <select className="input-shell w-full" value={managerSelectedStudentId} onChange={(e) => setManagerSelectedStudentId(e.target.value)} disabled={!managerSelectedBranchId}>
                   <option value="">Öğrenci seçin</option>
-                  {branchStudents.map((student) => (
-                    <option key={student.id} value={student.id}>{student.name}</option>
+                  {branchStudents.map((student, studentIndex) => (
+                    <option key={`${student.id ?? student.name ?? 'student'}-${studentIndex}`} value={student.id}>{student.name}</option>
                   ))}
                 </select>
               </div>
@@ -3297,8 +3433,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
                     <div className="flex flex-wrap items-center gap-2">
                       <select className="input-shell min-w-[140px]" value={studentBranchAddValue} onChange={(e) => setStudentBranchAddValue(e.target.value)}>
                         <option value="">Branş ekle</option>
-                        {availableManagerBranches.filter((branch) => !getStudentBranchIds(selectedManagerStudent).includes(branch.id)).map((branch) => (
-                          <option key={branch.id} value={branch.id}>{branch.name}</option>
+                        {availableManagerBranches.filter((branch) => !getStudentBranchIds(selectedManagerStudent).includes(branch.id)).map((branch, branchIndex) => (
+                          <option key={`${branch.id ?? 'branch-add'}-${branchIndex}`} value={branch.id}>{branch.name}</option>
                         ))}
                       </select>
                       <button
@@ -3465,8 +3601,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
             <h3 className="mb-4 text-xl font-semibold text-white">Gelen Mesajlar</h3>
             <div className="space-y-3">
               {(currentClub?.incomingMessages || []).length ? (
-                currentClub.incomingMessages.map((message) => (
-                  <div key={message.id} className={`rounded-2xl border p-4 ${message.read ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-700 bg-slate-900/80'}`}>
+                currentClub.incomingMessages.map((message, messageIndex) => (
+                  <div key={`${message.id ?? 'message'}-${messageIndex}`} className={`rounded-2xl border p-4 ${message.read ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-700 bg-slate-900/80'}`}>
                     <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <div className="font-semibold text-white">{message.senderName}</div>
@@ -3529,6 +3665,37 @@ function AppClean({ initialPublicClubId = null } = {}) {
     );
   };
 
+  function MessageComposer({ placeholder, onSend, buttonLabel = 'Mesaj Gönder', emptyMessage = 'Mesaj içeriği boş olamaz.' }) {
+    const [draft, setDraft] = useState('');
+
+    const handleSubmit = () => {
+      const content = draft.trim();
+      if (!content) {
+        alert(emptyMessage);
+        return;
+      }
+
+      onSend(content);
+      setDraft('');
+    };
+
+    return (
+      <div className="space-y-4">
+        <textarea
+          className="input-shell min-h-36"
+          placeholder={placeholder}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <div className="flex justify-end">
+          <button className="primary-btn w-full sm:w-auto" onClick={handleSubmit}>
+            {buttonLabel}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   function CoachPanel({
     currentUser,
     users,
@@ -3545,8 +3712,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
     setCoachTab,
     coachViewClubId,
     setCoachViewCoachId,
-    coachMessageText,
-    setCoachMessageText,
     getClubById,
     getStudentBranchIds,
   }) {
@@ -3585,26 +3750,65 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ?? null;
 
     const coachListForClub = users.filter((user) => user.role === 'coach' && user.clubId === coachClub?.id);
-    const selectedCoach = coachListForClub.find((user) => user.id === selectedCoachId)
-      ?? coachListForClub.find((user) => user.id === currentUser?.id)
+    const currentCoachMatch = currentUser?.role === 'coach' && currentUser.clubId === coachClub?.id
+      ? coachListForClub.find((user) => (
+          user.id === currentUser.id
+          || normalizeLoginUsername(String(user.username ?? '')) === normalizeLoginUsername(String(currentUser.username ?? ''))
+          || normalizeDuplicateText(String(user.name ?? '')) === normalizeDuplicateText(String(currentUser.name ?? ''))
+        )) ?? {
+          id: currentUser.id,
+          name: currentUser.name,
+          username: currentUser.username,
+          clubId: currentUser.clubId,
+          branchId: currentUser.branchId || '',
+          branchName: currentUser.branchName || '',
+          isActive: currentUser.isActive !== false,
+          role: 'coach',
+        }
+      : null;
+
+    const effectiveSelectedCoachId = currentUser?.role === 'coach'
+      ? (selectedCoachId || currentCoachMatch?.id || currentUser.id || coachListForClub[0]?.id || '')
+      : (selectedCoachId || coachListForClub[0]?.id || '');
+    const selectedCoach = coachListForClub.find((user) => user.id === effectiveSelectedCoachId)
+      ?? currentCoachMatch
+      ?? coachListForClub[0]
       ?? null;
 
     const validBranchIds = new Set((coachClub?.branches ?? []).map((branch) => branch.id));
-    const selectedCoachBranchId = (selectedCoach?.branchId && validBranchIds.has(selectedCoach.branchId))
-      ? selectedCoach.branchId
-      : (selectedCoach?.branch_id && validBranchIds.has(selectedCoach.branch_id))
-        ? selectedCoach.branch_id
-        : (selectedCoach?.branchName && coachClub?.branches?.find((branch) => String(branch.name).trim().toLowerCase() === String(selectedCoach.branchName).trim().toLowerCase())?.id)
-          ? coachClub.branches.find((branch) => String(branch.name).trim().toLowerCase() === String(selectedCoach.branchName).trim().toLowerCase())?.id
-          : '';
+    const resolvedCoachBranchCandidates = [
+      currentUser?.branchId,
+      currentUser?.branch_id,
+      selectedCoach?.branchId,
+      selectedCoach?.branch_id,
+      selectedCoach?.branchName,
+    ].filter(Boolean);
+
+    const selectedCoachBranchId = resolvedCoachBranchCandidates.find((candidate) => {
+      if (typeof candidate === 'string' && validBranchIds.has(candidate)) return true;
+      if (typeof candidate === 'string' && coachClub?.branches?.some((branch) => String(branch.name).trim().toLowerCase() === String(candidate).trim().toLowerCase())) {
+        return true;
+      }
+      return false;
+    }) || (
+      selectedCoach?.branchName
+        ? coachClub?.branches?.find((branch) => String(branch.name).trim().toLowerCase() === String(selectedCoach.branchName).trim().toLowerCase())?.id || ''
+        : ''
+    );
     const selectedCoachBranch = coachClub?.branches?.find((branch) => branch.id === selectedCoachBranchId) ?? null;
-    const coachStudents = coachClub?.students.filter((student) => getStudentBranchIds(student).includes(selectedCoachBranchId)) ?? [];
+    const allCoachStudents = coachClub?.students.filter((student) => {
+      const studentBranchIds = getStudentBranchIds(student);
+      return studentBranchIds.includes(selectedCoachBranchId) || (
+        selectedCoachBranchId && student.branch_id && String(student.branch_id) === String(selectedCoachBranchId)
+      );
+    }) ?? [];
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const coachStudents = allCoachStudents.filter((student) => !(student.attendance ?? []).some((entry) => entry.date === todayIso));
     const clubNameForCoach = coachClub?.name || getClubById(currentUser?.clubId)?.name || 'Kulüp';
     const branchName = String(selectedCoach?.branchName || selectedCoach?.branch_name || selectedCoachBranch?.name || 'Branş').trim() || 'Branş';
     const coachDisplayName = `${selectedCoach?.name || activeDisplayUser?.name || currentUser?.name || 'Antrenör'} - ${clubNameForCoach} (${branchName})`;
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const presentCount = coachStudents.filter((student) => (student.attendance ?? []).some((entry) => entry.date === todayIso && entry.status === 'present')).length;
-    const pendingCount = coachStudents.length - presentCount;
+    const presentCount = allCoachStudents.filter((student) => (student.attendance ?? []).some((entry) => entry.date === todayIso && entry.status === 'present')).length;
+    const pendingCount = coachStudents.length;
     const coachTabs = [
       { key: 'attendance', label: 'Yoklama' },
       { key: 'messages', label: 'Mesaj' },
@@ -3649,7 +3853,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Antrenör Seç</span>
               <select
                 className="input-shell"
-                value={selectedCoachId || ''}
+                value={effectiveSelectedCoachId || ''}
                 onChange={(event) => {
                   const nextCoachId = event.target.value;
                   setSelectedCoachId(nextCoachId);
@@ -3717,12 +3921,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 text-sm text-slate-400">Bu branş için atanmış öğrenci bulunmuyor.</div>
             ) : (
               <div className="space-y-3">
-                {coachStudents.map((student) => {
+                {coachStudents.map((student, studentIndex) => {
                   const todayStatus = (student.attendance ?? []).find((entry) => entry.date === todayIso)?.status ?? 'pending';
                   const todayLabel = todayStatus === 'present' ? 'Katıldı' : todayStatus === 'absent' ? 'Katılmadı' : todayStatus === 'excused' ? 'İzinli' : 'Henüz işaretlenmedi';
 
                   return (
-                    <div key={student.id} className="flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-900/80 p-4 md:flex-row md:items-center md:justify-between">
+                    <div key={`${student.id ?? student.name ?? 'coach-student'}-${studentIndex}`} className="flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-900/80 p-4 md:flex-row md:items-center md:justify-between">
                       <div className="min-w-0">
                         <div className="font-semibold text-white">{student.name}</div>
                         <div className="text-xs text-slate-400">{student.parentName}</div>
@@ -3744,28 +3948,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
         {coachTab === 'messages' && (
           <div className="card-surface rounded-3xl p-5">
             <h3 className="mb-4 text-xl font-semibold text-white">Yöneticiye Mesaj Gönder</h3>
-            <textarea
-              className="input-shell min-h-36"
+            <MessageComposer
               placeholder="Mesajınızı yazın..."
-              value={coachMessageText}
-              onChange={(e) => setCoachMessageText(e.target.value)}
+              buttonLabel="Mesaj Gönder"
+              onSend={(content) => sendManagerMessage(currentUser?.name || 'Antrenör', 'Antrenör', content)}
             />
-            <div className="mt-4 flex justify-end">
-              <button
-                className="primary-btn w-full sm:w-auto"
-                onClick={() => {
-                  const content = coachMessageText.trim();
-                  if (!content) {
-                    alert('Mesaj içeriği boş olamaz.');
-                    return;
-                  }
-                  sendManagerMessage(currentUser?.name || 'Antrenör', 'Antrenör', content);
-                  setCoachMessageText('');
-                }}
-              >
-                Mesaj Gönder
-              </button>
-            </div>
           </div>
         )}
 
@@ -3863,12 +4050,46 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const renderParentPanel = () => {
-    const childStudent = currentClub?.students.find((student) => student.id === currentUser?.childStudentId) ?? currentClub?.students[0];
-    const parentNotifications = (currentClub?.notifications || []).filter((notification) => {
-      const studentMatches = !notification.studentId || notification.studentId === childStudent?.id;
-      const phoneMatches = !notification.parentPhone || !childStudent?.parentPhone || normalizeWhatsappNumber(notification.parentPhone) === normalizeWhatsappNumber(childStudent.parentPhone);
+    const adminFilterEnabled = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager' || activeRole === 'club-manager' || activeRole === 'super-admin' || activeRole === 'super_admin';
+
+    const availableClubOptions = adminFilterEnabled
+      ? clubs
+      : (currentUser?.clubId ? clubs.filter((club) => club.id === currentUser.clubId) : clubs);
+
+    const resolvedParentClubId = adminFilterEnabled
+      ? (parentFilterClubId || selectedClubId || currentUser?.clubId || availableClubOptions[0]?.id || '')
+      : (currentUser?.clubId || selectedClubId || currentClub?.id || availableClubOptions[0]?.id || '');
+
+    const activeParentClub = clubs.find((club) => club.id === resolvedParentClubId) ?? currentClub ?? availableClubOptions[0] ?? null;
+    const branchOptions = activeParentClub?.branches ?? [];
+    const effectiveBranchId = parentFilterBranchId && branchOptions.some((branch) => branch.id === parentFilterBranchId)
+      ? parentFilterBranchId
+      : (branchOptions[0]?.id ?? '');
+
+    const branchStudents = (activeParentClub?.students ?? []).filter((student) => {
+      if (!effectiveBranchId) return true;
+      const candidateBranchIds = Array.isArray(student.branchIds) ? student.branchIds.filter(Boolean) : [];
+      return candidateBranchIds.includes(effectiveBranchId) || (student.branchId && String(student.branchId) === String(effectiveBranchId));
+    });
+
+    const selectedStudent = branchStudents.find((student) => student.id === parentFilterStudentId)
+      ?? branchStudents.find((student) => student.id === currentUser?.childStudentId)
+      ?? branchStudents[0]
+      ?? (activeParentClub?.students ?? []).find((student) => student.id === currentUser?.childStudentId)
+      ?? (activeParentClub?.students ?? [])[0]
+      ?? null;
+
+    const targetStudent = selectedStudent || currentClub?.students.find((student) => student.id === currentUser?.childStudentId) || currentClub?.students[0] || null;
+    const parentNotifications = (activeParentClub?.notifications || []).filter((notification) => {
+      const studentMatches = !notification.studentId || notification.studentId === targetStudent?.id;
+      const phoneMatches = !notification.parentPhone || !targetStudent?.parentPhone || normalizeWhatsappNumber(notification.parentPhone) === normalizeWhatsappNumber(targetStudent.parentPhone);
       return studentMatches && phoneMatches;
     });
+
+    const attendanceEntries = targetStudent?.attendance ?? [];
+    const presentCount = attendanceEntries.filter((entry) => entry.status === 'present').length;
+    const absentCount = attendanceEntries.filter((entry) => entry.status === 'absent').length;
+    const paymentRows = (activeParentClub?.payments ?? []).filter((pay) => String(pay.studentId) === String(targetStudent?.id));
 
     const tabs = [
       { key: 'attendance', label: 'Devamsızlık Geçmişi' },
@@ -3876,15 +4097,94 @@ function AppClean({ initialPublicClubId = null } = {}) {
       { key: 'communication', label: 'İletişim / Duyurular' },
     ];
 
+    const parentHeaderName = targetStudent?.parentName || activeDisplayUser?.name || currentUser?.name || 'Veli';
+    const parentHeaderPhone = targetStudent?.parentPhone || activeDisplayUser?.phone || currentUser?.phone || '';
+    const parentHeaderUsername = activeDisplayUser?.username || currentUser?.username || 'veli';
+
     return (
       <div className="space-y-6">
         <div className="card-surface rounded-3xl p-6">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-sm text-slate-400">Veli / Üye</p>
-              <h2 className="text-2xl font-bold text-white">{activeDisplayUser?.name || childStudent?.parentName || 'Veli'}</h2>
+              <h2 className="text-2xl font-bold text-white">{parentHeaderName}</h2>
             </div>
-            <div className="rounded-xl border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-sm text-orange-200">Kullanıcı: {activeDisplayUser?.username || currentUser?.username || 'veli'}</div>
+            <div className="rounded-xl border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-sm text-orange-200">Kullanıcı: {parentHeaderUsername}</div>
+          </div>
+
+          {adminFilterEnabled && (
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <label className="space-y-2">
+                <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Kulüp Seç</span>
+                <select
+                  className="input-shell"
+                  value={resolvedParentClubId}
+                  onChange={(event) => {
+                    const nextClubId = event.target.value;
+                    setParentFilterClubId(nextClubId);
+                    setParentFilterBranchId('');
+                    setParentFilterStudentId('');
+                  }}
+                >
+                  <option value="">Kulüp Seç</option>
+                  {availableClubOptions.map((club) => (
+                    <option key={club.id} value={club.id}>{club.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-2">
+                <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Branş Seç</span>
+                <select
+                  className="input-shell"
+                  value={effectiveBranchId}
+                  onChange={(event) => {
+                    const nextBranchId = event.target.value;
+                    setParentFilterBranchId(nextBranchId);
+                    setParentFilterStudentId('');
+                  }}
+                  disabled={!branchOptions.length}
+                >
+                  <option value="">Tüm Branşlar</option>
+                  {branchOptions.map((branch) => (
+                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-2">
+                <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Veli / Öğrenci Seç</span>
+                <select
+                  className="input-shell"
+                  value={selectedStudent?.id || ''}
+                  onChange={(event) => setParentFilterStudentId(event.target.value)}
+                  disabled={!branchStudents.length}
+                >
+                  <option value="">Veli / Öğrenci Seç</option>
+                  {branchStudents.map((student) => (
+                    <option key={student.id} value={student.id}>{student.name || student.full_name || student.studentName || 'Öğrenci'} • {student.parentName || 'Veli'}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+              <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Öğrenci</div>
+              <div className="mt-2 text-lg font-bold text-white">{targetStudent?.name || targetStudent?.full_name || 'Seçilmedi'}</div>
+              <div className="text-sm text-slate-300">{targetStudent?.parentName || 'Veli bilgisi yok'}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+              <div className="text-xs uppercase tracking-[0.2em] text-slate-400">İletişim</div>
+              <div className="mt-2 text-lg font-bold text-white">{parentHeaderPhone ? formatWhatsappDisplay(parentHeaderPhone) : 'Telefon yok'}</div>
+              <div className="text-sm text-slate-300">{activeParentClub?.name || 'Kulüp'}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+              <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Durum</div>
+              <div className="mt-2 text-lg font-bold text-emerald-300">{presentCount}</div>
+              <div className="text-sm text-red-300">Devamsız: {absentCount}</div>
+            </div>
           </div>
         </div>
 
@@ -3910,7 +4210,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 type="button"
                 className="secondary-btn"
                 onClick={() => {
-                  const nextStudentId = childStudent?.id ?? null;
+                  const nextStudentId = targetStudent?.id ?? null;
                   setAttendanceCalendar({ studentId: nextStudentId, month: new Date().toISOString().slice(0, 7) });
                   setShowAttendanceSummaryModal(true);
                 }}
@@ -3919,8 +4219,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
               </button>
             </div>
             <div className="space-y-3">
-              {childStudent?.attendance?.length ? (
-                childStudent.attendance.map((item, idx) => (
+              {attendanceEntries.length ? (
+                attendanceEntries.map((item, idx) => (
                   <div key={`${item.date}-${idx}`} className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/80 p-3">
                     <span className="text-white">{item.date}</span>
                     <span className={`status-pill ${item.status === 'present' ? 'bg-emerald-500/15 text-emerald-300' : item.status === 'absent' ? 'bg-red-500/15 text-red-300' : 'bg-amber-500/15 text-amber-300'}`}>
@@ -3939,23 +4239,27 @@ function AppClean({ initialPublicClubId = null } = {}) {
           <div className="card-surface rounded-3xl p-6">
             <h3 className="mb-4 text-xl font-semibold text-white">Ödeme / Taksit Durumu</h3>
             <div className="space-y-3">
-              {currentClub?.payments.filter((pay) => pay.studentId === childStudent?.id).map((pay) => {
-                const scheduleItem = currentClub?.paymentSchedule?.find((item) => item.month === pay.month);
-                const dueDateText = scheduleItem?.due ? `Son Ödeme: ${formatShortDate(scheduleItem.due)}` : `Dönem: ${pay.month}`;
+              {paymentRows.length ? (
+                paymentRows.map((pay, payIndex) => {
+                  const scheduleItem = activeParentClub?.paymentSchedule?.find((item) => item.month === pay.month);
+                  const dueDateText = scheduleItem?.due ? `Son Ödeme: ${formatShortDate(scheduleItem.due)}` : `Dönem: ${pay.month}`;
 
-                return (
-                  <div key={pay.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-900/80 p-3">
-                    <div className="min-w-0">
-                      <div className="font-medium text-white">{pay.month}</div>
-                      <div className="mt-1 text-xs text-slate-400">{dueDateText}</div>
-                      <div className="mt-1 text-xs text-slate-400">{Number(pay.amount || 0).toLocaleString('tr-TR')} ₺</div>
+                  return (
+                    <div key={`${pay.id ?? 'payment'}-${payIndex}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-900/80 p-3">
+                      <div className="min-w-0">
+                        <div className="font-medium text-white">{pay.month}</div>
+                        <div className="mt-1 text-xs text-slate-400">{dueDateText}</div>
+                        <div className="mt-1 text-xs text-slate-400">{Number(pay.amount || 0).toLocaleString('tr-TR')} ₺</div>
+                      </div>
+                      <span className={`status-pill ${pay.status === 'Ödendi' ? 'bg-emerald-500/15 text-emerald-300' : pay.status === 'Gecikti' ? 'bg-red-500/15 text-red-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                        {pay.status}
+                      </span>
                     </div>
-                    <span className={`status-pill ${pay.status === 'Ödendi' ? 'bg-emerald-500/15 text-emerald-300' : pay.status === 'Gecikti' ? 'bg-red-500/15 text-red-300' : 'bg-amber-500/15 text-amber-300'}`}>
-                      {pay.status}
-                    </span>
-                  </div>
-                );
-              })}
+                  );
+                })
+              ) : (
+                <div className="text-slate-400">Bu öğrenciye ait ödeme kaydı yok.</div>
+              )}
             </div>
           </div>
         )}
@@ -3985,39 +4289,22 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
             <div className="card-surface rounded-3xl p-6">
               <h3 className="mb-4 text-xl font-semibold text-white">Yöneticiye Mesaj Gönder</h3>
-              <textarea
-                className="input-shell min-h-28"
+              <MessageComposer
                 placeholder="Mesajınızı yazın..."
-                value={parentMessageText}
-                onChange={(e) => setParentMessageText(e.target.value)}
+                buttonLabel="Mesaj Gönder"
+                onSend={(content) => sendManagerMessage(currentUser?.name || 'Veli', 'Veli', content, {
+                  studentId: targetStudent?.id,
+                  studentName: targetStudent?.name || targetStudent?.full_name || 'Öğrenci',
+                })}
               />
-              <div className="mt-4 flex justify-end">
-                <button
-                  className="primary-btn"
-                  onClick={() => {
-                    const content = parentMessageText.trim();
-                    if (!content) {
-                      alert('Mesaj içeriği boş olamaz.');
-                      return;
-                    }
-                    sendManagerMessage(currentUser?.name || 'Veli', 'Veli', content, {
-                      studentId: childStudent?.id,
-                      studentName: childStudent?.name || childStudent?.full_name || 'Öğrenci',
-                    });
-                    setParentMessageText('');
-                  }}
-                >
-                  Mesaj Gönder
-                </button>
-              </div>
             </div>
 
             <div className="card-surface rounded-3xl p-6">
               <h3 className="mb-4 text-xl font-semibold text-white">Duyurular</h3>
               <div className="space-y-3">
-                {(currentClub?.announcements || []).length ? (
-                  currentClub.announcements.map((item) => (
-                    <div key={item.id} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
+                {(activeParentClub?.announcements || []).length ? (
+                  (activeParentClub?.announcements || []).map((item, announcementIndex) => (
+                    <div key={`${item.id ?? 'announcement'}-${announcementIndex}`} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
                       <div className="mb-2 flex items-start justify-between gap-3">
                         <div>
                           <div className="font-semibold text-white">{item.title}</div>
@@ -4095,11 +4382,44 @@ function AppClean({ initialPublicClubId = null } = {}) {
         username: userRecord.username || cleanedUsername,
         password: userRecord.password || enteredPassword,
         role: userRecord.role || fallbackRole,
-        clubId: userRecord.club_id || userRecord.id || null,
+        clubId: userRecord.club_id || userRecord.clubId || userRecord.id || null,
+        branchId: userRecord.branch_id || userRecord.branchId || userRecord.branch || null,
         phone: userRecord.phone || '',
         email: userRecord.email || '',
         isActive: userRecord.is_active !== false,
       };
+
+      if (mappedUser.role === 'coach' && mappedUser.clubId && !mappedUser.branchId && supabase && supabase.from) {
+        supabase
+          .from('club_coaches')
+          .select('*')
+          .eq('club_id', mappedUser.clubId)
+          .then(({ data, error }) => {
+            if (error || !Array.isArray(data)) return;
+            const matchedCoach = (data ?? []).find((row) => {
+              const normalizeRowUsername = normalizeLoginUsername(String(row.username ?? ''));
+              const normalizeInputUsername = normalizeLoginUsername(String(mappedUser.username ?? ''));
+              const normalizeRowName = normalizeDuplicateText(String(row.name ?? ''));
+              const normalizeInputName = normalizeDuplicateText(String(mappedUser.name ?? ''));
+              return normalizeRowUsername === normalizeInputUsername || normalizeRowName === normalizeInputName;
+            });
+
+            if (matchedCoach) {
+              const enrichedUser = {
+                ...mappedUser,
+                id: matchedCoach.id || mappedUser.id,
+                clubId: matchedCoach.club_id || mappedUser.clubId,
+                branchId: matchedCoach.branch_id || mappedUser.branchId || null,
+                name: matchedCoach.name || mappedUser.name,
+                username: matchedCoach.username || mappedUser.username,
+              };
+              setCurrentUser(enrichedUser);
+              setActiveRole(enrichedUser.role);
+              if (enrichedUser.clubId) setSelectedClubId(enrichedUser.clubId);
+              return;
+            }
+          });
+      }
 
       setCurrentUser(mappedUser);
       setActiveRole(mappedUser.role);
@@ -4151,6 +4471,31 @@ function AppClean({ initialPublicClubId = null } = {}) {
             club_id: profileMatch.club_id || null,
           }, profileMatch.role || 'parent');
           console.log('Profiles tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
+          return;
+        }
+      }
+
+      const { data: coachData, error: coachError } = await supabase.from('club_coaches').select('*');
+      console.log('3. Club_coaches tablosu arama sonucu:', coachData, coachError);
+
+      if (!coachError && Array.isArray(coachData) && coachData.length > 0) {
+        const coachMatch = coachData.find((row) => {
+          const storedPassword = String(row.password ?? '').trim();
+          const sameUsername = normalizeLoginUsername(String(row.username ?? '')) === normalizeLoginUsername(cleanedUsername);
+          const sameName = normalizeDuplicateText(String(row.name ?? '')) === normalizeDuplicateText(cleanedUsername);
+          return storedPassword === enteredPassword && (sameUsername || sameName || matchesLoginIdentity(row, cleanedUsername));
+        });
+
+        console.log('club_coaches tablosunda eşleşen antrenör:', coachMatch);
+
+        if (coachMatch) {
+          const mappedUser = applyAuthenticatedUser({
+            ...coachMatch,
+            role: 'coach',
+            club_id: coachMatch.club_id || coachMatch.clubId || null,
+            branch_id: coachMatch.branch_id || coachMatch.branchId || null,
+          }, 'coach');
+          console.log('club_coaches eşleşmesi ile giriş yapıldı:', mappedUser);
           return;
         }
       }
@@ -4223,14 +4568,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
       name: selectedStudentDetail.name ?? '',
       parentName: selectedStudentDetail.parentName ?? '',
       parentPhone: selectedStudentDetail.parentPhone ?? '',
+      birthDate: selectedStudentDetail.birthDate ?? selectedStudentDetail.birth_date ?? '',
       startedAt: selectedStudentDetail.startedAt ?? selectedStudentDetail.enrollmentDate ?? '',
     });
   }, [showStudentDetailModal, selectedStudentDetail]);
 
-  const handleSaveStudentDetail = () => {
+  const handleSaveStudentDetail = async () => {
     const nextName = studentDetailForm.name.trim();
     const nextParentName = studentDetailForm.parentName.trim();
     const nextParentPhone = normalizeWhatsappNumber(studentDetailForm.parentPhone);
+    const nextBirthDate = studentDetailForm.birthDate || '';
     const nextStartedAt = studentDetailForm.startedAt || '';
 
     setClubs((prev) =>
@@ -4246,6 +4593,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   name: nextName || student.name,
                   parentName: nextParentName || student.parentName,
                   parentPhone: nextParentPhone || student.parentPhone,
+                  birthDate: nextBirthDate || student.birthDate || student.birth_date || '',
                   startedAt: nextStartedAt || student.startedAt || '',
                 }
               : student
@@ -4275,10 +4623,27 @@ function AppClean({ initialPublicClubId = null } = {}) {
             name: nextName || prev.name,
             parentName: nextParentName || prev.parentName,
             parentPhone: nextParentPhone || prev.parentPhone,
+            birthDate: nextBirthDate || prev.birthDate || prev.birth_date || '',
             startedAt: nextStartedAt || prev.startedAt || '',
           }
         : prev
     );
+
+    if (studentDetailForm.studentId) {
+      const { error } = await supabase
+        .from('club_students')
+        .update({
+          birth_date: nextBirthDate || null,
+          started_at: nextStartedAt || null,
+        })
+        .eq('id', studentDetailForm.studentId);
+
+      if (error) {
+        console.error('Student birth-date update failed:', error);
+        alert('Öğrenci doğum tarihi güncellenemedi.');
+        return;
+      }
+    }
 
     setShowStudentDetailModal(false);
     setToastMessage('Öğrenci detay bilgileri kaydedildi.');
@@ -4300,6 +4665,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 className="input-shell"
                 value={studentDetailForm.name}
                 onChange={(e) => setStudentDetailForm({ ...studentDetailForm, name: e.target.value })}
+              />
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300">
+              <span>Doğum Tarihi</span>
+              <input
+                type="date"
+                className="input-shell"
+                value={studentDetailForm.birthDate}
+                onChange={(e) => setStudentDetailForm({ ...studentDetailForm, birthDate: e.target.value })}
               />
             </label>
 
@@ -4387,26 +4762,71 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return insertIntoSupabase('clubs', [record]);
   };
 
-  const persistProfileToSupabase = async ({ clubId, role, fullName, username, password, phone, isActive = true, branchId = null, branchName = '' }) => {
-    const safeBranchId = normalizeDbBranchId(branchId);
-    const safeBranchName = String(branchName || '').trim();
+  const persistProfileToSupabase = async ({ clubId, role, fullName, username, password, phone, isActive = true }) => {
+    const safeClubId = normalizeDbClubId(clubId);
+    const safeRole = String(role || 'parent').trim();
+    const safeFullName = String(fullName || '').trim();
     const generatedUsername = buildGeneratedUsernameFromName(username, fullName) || null;
+    const safeUsername = String(generatedUsername || '').trim() || null;
+    const safePassword = String(password || '').trim() || null;
     const record = {
-      club_id: normalizeDbClubId(clubId),
-      role: String(role || 'parent').trim(),
-      full_name: String(fullName || '').trim(),
-      username: generatedUsername,
-      password: String(password || '').trim() || null,
+      club_id: safeClubId,
+      role: safeRole,
+      full_name: safeFullName,
+      username: safeUsername,
+      password: safePassword,
       email: null,
       phone: String(phone || '').trim() || null,
       is_active: Boolean(isActive),
-      ...(safeBranchId ? { branch_id: safeBranchId } : {}),
-      ...(safeBranchName ? { branch_name: safeBranchName } : {}),
       created_at: new Date().toISOString(),
     };
 
     if (!record.full_name || !record.club_id) {
       return { ok: false, error: new Error('Profil kaydı için gerekli alanlar eksik.') };
+    }
+
+    if (!supabase || !supabase.from) {
+      return { ok: false, error: new Error('Supabase client unavailable') };
+    }
+
+    if (record.username) {
+      const { data: existingProfiles, error: lookupError } = await supabase
+        .from('profiles')
+        .select('id, club_id, username, role, full_name')
+        .eq('club_id', safeClubId)
+        .eq('username', record.username)
+        .limit(1);
+
+      if (lookupError) {
+        console.error('Profile duplicate lookup failed:', lookupError);
+      }
+
+      const existingProfile = (existingProfiles ?? []).find((profile) => {
+        const profileUsername = String(profile?.username ?? '').trim();
+        const profileRole = String(profile?.role ?? '').trim().toLowerCase();
+        return profileUsername && profileUsername.toLowerCase() === record.username.toLowerCase() && (profileRole === safeRole.toLowerCase() || !profileRole);
+      });
+
+      if (existingProfile) {
+        const { data: updatedProfile, error: updateError } = await supabase
+          .from('profiles')
+          .update({
+            role: record.role,
+            full_name: record.full_name,
+            password: record.password,
+            phone: record.phone,
+            is_active: record.is_active,
+          })
+          .eq('id', existingProfile.id)
+          .select();
+
+        if (updateError) {
+          console.error('Profile duplicate update failed:', updateError);
+          return { ok: false, error: updateError };
+        }
+
+        return { ok: true, inserted: 1, data: updatedProfile ?? [], updated: true };
+      }
     }
 
     return insertIntoSupabase('profiles', [record]);
@@ -4447,7 +4867,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return insertIntoSupabase('club_branches', [record]);
   };
 
-  const persistCoachToSupabase = async ({ clubId, name, username, password, phone, branchId }) => {
+  const persistCoachToSupabase = async ({ clubId, name, username, password, phone, branchId, profileId = null }) => {
     const safeClubId = normalizeDbClubId(clubId || selectedClubId);
     const safeBranchId = normalizeDbBranchId(branchId);
     const normalizedName = String(name || '').trim();
@@ -4463,6 +4883,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
       is_active: true,
       created_at: new Date().toISOString(),
     };
+
+    if (profileId) {
+      console.log('Coach club row will use profile metadata as source of truth:', {
+        profileId,
+        club_id: safeClubId,
+        branch_id: safeBranchId,
+        username: normalizedUsername,
+        name: normalizedName,
+      });
+    }
 
     if (!record.club_id || !record.name || !record.username || !record.branch_id) {
       return { ok: false, error: new Error('Antrenör için geçerli bir kulüp ve branş seçimi zorunludur.') };
@@ -4541,6 +4971,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       club_id: clubId,
       student_name: String(normalizedNameParts.studentName || '').trim(),
       student_surname: String(normalizedNameParts.studentSurname || '').trim(),
+      birth_date: payload.birthDate || null,
       parent_name: String(payload.parentName || '').trim(),
       parent_phone: String(payload.parentPhone || '').trim(),
       branch_id: normalizeDbBranchId(payload.branchId),
@@ -4783,7 +5214,18 @@ function AppClean({ initialPublicClubId = null } = {}) {
             value={applicationForm.studentSurname}
             onChange={(e) => setApplicationForm({ ...applicationForm, studentSurname: toTurkishUpper(e.target.value) })}
           />
-          <input className="input-shell" type="date" value={applicationForm.birthDate} onChange={(e) => setApplicationForm({ ...applicationForm, birthDate: e.target.value })} />
+          <label className="space-y-2 text-sm text-slate-300">
+            <span className="block text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Öğrenci Doğum Tarihi</span>
+            <input
+              className="input-shell"
+              type="date"
+              value={applicationForm.birthDate}
+              placeholder="Doğum Tarihi (gg.aa.yyyy)"
+              title="Öğrenci Doğum Tarihi"
+              aria-label="Öğrenci Doğum Tarihi"
+              onChange={(e) => setApplicationForm({ ...applicationForm, birthDate: e.target.value })}
+            />
+          </label>
           <select
             className="input-shell"
             value={applicationForm.branchId || ''}
@@ -4861,6 +5303,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
             const payload = {
               studentName: studentNameParts.studentName,
               studentSurname: studentNameParts.studentSurname,
+              birthDate: applicationForm.birthDate,
               branchId: applicationForm.branchId,
               parentName: applicationForm.parentName,
               parentPhone: applicationForm.parentPhone,
@@ -4998,8 +5441,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
         setCoachTab={setCoachTab}
         coachViewClubId={coachViewClubId}
         setCoachViewCoachId={setCoachViewCoachId}
-        coachMessageText={coachMessageText}
-        setCoachMessageText={setCoachMessageText}
         getClubById={getClubById}
         getStudentBranchIds={getStudentBranchIds}
       />

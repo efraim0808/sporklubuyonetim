@@ -20,6 +20,11 @@ DELETE FROM public.club_branches;
 DELETE FROM public.clubs;
 
 -- 6) Keep the super-admin profile intact; do not delete or modify it.
+-- If you also want to delete non-admin profiles, exclude both role variants explicitly.
+DELETE FROM public.profiles
+WHERE role IS NOT NULL
+  AND LOWER(role) NOT IN ('super-admin', 'super_admin');
+
 INSERT INTO public.profiles (id, club_id, role, full_name, username, password, email, phone, is_active, created_at)
 VALUES (
   '00000000-0000-0000-0000-000000000001',

@@ -127,11 +127,15 @@ CREATE TABLE IF NOT EXISTS club_messages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.club_messages
+  ADD COLUMN IF NOT EXISTS read BOOLEAN NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS club_applications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
   student_name TEXT NOT NULL,
   student_surname TEXT NOT NULL,
+  birth_date DATE,
   parent_name TEXT NOT NULL,
   parent_phone TEXT NOT NULL,
   branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
