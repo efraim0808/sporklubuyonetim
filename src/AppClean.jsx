@@ -1449,27 +1449,67 @@ function AppClean({ initialPublicClubId = null } = {}) {
     if (!confirmed) return;
 
     try {
-      const { data, error } = await supabase.rpc('reset_app_data');
-      if (error) {
-        console.error('Supabase app reset failed:', error);
-        alert('Sistem sıfırlanamadı. Lütfen veritabanı fonksiyonunu kontrol edin.');
-        return;
+      if (!supabase || !supabase.from) {
+        throw new Error('Supabase bağlantısı mevcut değil.');
       }
 
-      await loadClubs();
+      const tablesToReset = [
+        'club_applications',
+        'club_students',
+        'club_coaches',
+        'club_branches',
+        'clubs',
+      ];
+
+      for (const tableName of tablesToReset) {
+        const { error } = await supabase
+          .from(tableName)
+          .delete()
+          .neq('id', '');
+
+        if (error) {
+          console.error(`App reset failed for table: ${tableName}`, error);
+          throw error;
+        }
+      }
+
+      setCurrentUser({ ...lockedSuperAdminUser, role: 'super-admin', isActive: true });
+      setActiveRole('super-admin');
       setClubs([]);
       setUsers((prev) => prev.filter((user) => isSuperAdminRole(user) || user.id === lockedSuperAdminUser.id));
       setSelectedClubId('');
       setExpandedClubId(null);
       setSuperAdminDetailClubId(null);
+      setCoachViewClubId('');
+      setCoachViewCoachId('');
+      setSelectedCoachId('');
+      setManagerSelectedBranchId('');
+      setManagerSelectedStudentId('');
+      setSelectedStudentDetail(null);
+      setShowStudentDetailModal(false);
+      setStudentDetailForm({
+        studentId: '',
+        name: '',
+        parentName: '',
+        parentPhone: '',
+        startedAt: '',
+      });
+      setAttendanceCalendar({ studentId: null, month: new Date().toISOString().slice(0, 7) });
       setPublicFormClubId(null);
       setPublicClubDetails(null);
+      setPaymentFilter('all');
+      setPaymentSearch('');
+      setExpandedPaymentStudentId(null);
+      setClubListSearch('');
+
       if (typeof window !== 'undefined') {
+        window.localStorage.removeItem('sporthub_session_v1');
         const nextUrl = new URL(window.location.href);
         nextUrl.searchParams.delete('club');
         window.history.replaceState({}, '', nextUrl);
       }
-      setToastMessage(data?.[0]?.message ?? 'Sistem başarıyla temizlendi.');
+
+      setToastMessage('Tüm kulüp verileri başarıyla temizlendi.');
     } catch (error) {
       console.error('Unexpected app reset error:', error);
       alert('Sistem sıfırlanırken beklenmeyen bir hata oluştu.');
