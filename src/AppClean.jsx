@@ -1045,10 +1045,17 @@ function AppClean({ initialPublicClubId = null } = {}) {
     let isCancelled = false;
 
     const loadCoachProfiles = async () => {
-      const { data, error } = await supabase
+      const activeClubId = normalizeDbClubId(selectedClubId || currentUser?.clubId || clubs[0]?.id || '');
+      let query = supabase
         .from('profiles')
         .select('*')
         .in('role', ['coach', 'ANTRENÖR', 'trainer']);
+
+      if (activeClubId) {
+        query = query.eq('club_id', activeClubId);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         console.warn('Coach profile refresh failed:', error);
@@ -1061,7 +1068,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
           return roleValue === 'coach' || roleValue === 'antrenör' || roleValue === 'trainer';
         })
         .map((row) => {
-          const clubId = row.club_id || selectedClubId || currentUser?.clubId || '';
+          const clubId = normalizeDbClubId(row.club_id || selectedClubId || currentUser?.clubId || clubs[0]?.id || '') || row.club_id || selectedClubId || currentUser?.clubId || clubs[0]?.id || '';
           const clubBranches = clubs.find((club) => club.id === clubId)?.branches ?? [];
           const directBranchName = String(row.branch_name || '').trim();
           const branchId = row.branch_id || row.branchId || null;
@@ -3075,13 +3082,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
                           className={isCoachActive ? 'secondary-btn' : 'primary-btn'}
                           onClick={async () => {
                             const nextStatus = !isCoachActive;
+                            const activeCoachClubId = normalizeDbClubId(currentClub?.id || selectedClubId || currentUser?.clubId || '');
                             setUsers((prev) => prev.map((user) => user.id === coach.id ? { ...user, isActive: nextStatus } : user));
 
                             try {
                               const { error } = await supabase
                                 .from('club_coaches')
                                 .update({ is_active: nextStatus })
-                                .eq('club_id', currentClub?.id)
+                                .eq('club_id', activeCoachClubId)
                                 .eq('username', coach.username || coach.name);
 
                               if (error) throw error;
@@ -3089,7 +3097,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                               await supabase
                                 .from('profiles')
                                 .update({ is_active: nextStatus })
-                                .eq('club_id', currentClub?.id)
+                                .eq('club_id', activeCoachClubId)
                                 .eq('role', 'coach')
                                 .eq('username', coach.username || coach.name);
 
@@ -3110,11 +3118,13 @@ function AppClean({ initialPublicClubId = null } = {}) {
                             const confirmed = window.confirm(`${coach.name} antrenörünü silmek istediğinize emin misiniz?`);
                             if (!confirmed) return;
 
+                            const activeCoachClubId = normalizeDbClubId(currentClub?.id || selectedClubId || currentUser?.clubId || '');
+
                             try {
                               const { error: coachDeleteError } = await supabase
                                 .from('club_coaches')
                                 .delete()
-                                .eq('club_id', currentClub?.id)
+                                .eq('club_id', activeCoachClubId)
                                 .eq('username', coach.username || coach.name);
 
                               if (coachDeleteError) throw coachDeleteError;
@@ -3122,7 +3132,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                               const { error: profileDeleteError } = await supabase
                                 .from('profiles')
                                 .delete()
-                                .eq('club_id', currentClub?.id)
+                                .eq('club_id', activeCoachClubId)
                                 .eq('role', 'coach')
                                 .eq('username', coach.username || coach.name);
 
@@ -3130,7 +3140,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
                               setUsers((prev) => prev.filter((user) => user.id !== coach.id));
                               setClubs((prev) => prev.map((club) => (
-                                club.id === currentClub?.id
+                                club.id === activeCoachClubId
                                   ? {
                                       ...club,
                                       branches: (club.branches ?? []).map((branch) =>
