@@ -1046,30 +1046,32 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const loadCoachProfiles = async () => {
       const activeClubId = normalizeDbClubId(selectedClubId || currentUser?.clubId || clubs[0]?.id || '');
-      let query = supabase
-        .from('profiles')
-        .select('*')
-        .in('role', ['coach', 'ANTRENÖR', 'trainer']);
 
-      if (activeClubId) {
-        query = query.eq('club_id', activeClubId);
-      }
+      try {
+        let query = supabase
+          .from('profiles')
+          .select('*')
+          .in('role', ['coach', 'ANTRENÖR', 'trainer']);
 
-      const { data, error } = await query;
+        if (activeClubId) {
+          query = query.eq('club_id', activeClubId);
+        }
 
-      if (error) {
-        console.warn('Coach profile refresh failed:', error);
-        return;
-      }
+        const { data, error } = await query;
 
-      const normalizedCoaches = (data ?? [])
-        .filter((row) => {
-          const roleValue = String(row.role ?? '').trim().toLowerCase();
-          return roleValue === 'coach' || roleValue === 'antrenör' || roleValue === 'trainer';
-        })
-        .map((row) => {
-          const clubId = normalizeDbClubId(row.club_id || selectedClubId || currentUser?.clubId || clubs[0]?.id || '') || row.club_id || selectedClubId || currentUser?.clubId || clubs[0]?.id || '';
-          const clubBranches = clubs.find((club) => club.id === clubId)?.branches ?? [];
+        if (error) {
+          console.warn('Coach profile refresh failed:', error, { activeClubId, selectedClubId, currentUserClubId: currentUser?.clubId });
+          return;
+        }
+
+        const normalizedCoaches = (data ?? [])
+          .filter((row) => {
+            const roleValue = String(row.role ?? '').trim().toLowerCase();
+            return roleValue === 'coach' || roleValue === 'antrenör' || roleValue === 'trainer';
+          })
+          .map((row) => {
+            const clubId = normalizeDbClubId(row.club_id || selectedClubId || currentUser?.clubId || clubs[0]?.id || '') || row.club_id || selectedClubId || currentUser?.clubId || clubs[0]?.id || '';
+            const clubBranches = clubs.find((club) => club.id === clubId)?.branches ?? [];
           const directBranchName = String(row.branch_name || '').trim();
           const branchId = row.branch_id || row.branchId || null;
           const matchedBranchById = clubBranches.find((branch) => branch.id === branchId) ?? null;
@@ -1095,22 +1097,30 @@ function AppClean({ initialPublicClubId = null } = {}) {
           };
         });
 
-      if (isCancelled || !normalizedCoaches.length) return;
+        if (isCancelled || !normalizedCoaches.length) return;
 
-      setUsers((prev) => {
-        const merged = [...prev];
+        setUsers((prev) => {
+          const merged = [...prev];
 
-        normalizedCoaches.forEach((coach) => {
-          const index = merged.findIndex((user) => user.id === coach.id || (user.username && coach.username && user.username === coach.username && user.clubId === coach.clubId));
-          if (index >= 0) {
-            merged[index] = { ...merged[index], ...coach };
-          } else {
-            merged.push(coach);
-          }
+          normalizedCoaches.forEach((coach) => {
+            const index = merged.findIndex((user) => user.id === coach.id || (user.username && coach.username && user.username === coach.username && user.clubId === coach.clubId));
+            if (index >= 0) {
+              merged[index] = { ...merged[index], ...coach };
+            } else {
+              merged.push(coach);
+            }
+          });
+
+          return merged;
         });
-
-        return merged;
-      });
+      } catch (error) {
+        console.error('Coach profile load crashed:', error, {
+          activeClubId,
+          selectedClubId,
+          currentUserClubId: currentUser?.clubId,
+          clubCount: clubs.length,
+        });
+      }
     };
 
     loadCoachProfiles();
