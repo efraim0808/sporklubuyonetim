@@ -1,4 +1,5 @@
 -- Direct database reset script without any RPC function dependency.
+-- The locked super-admin account is intentionally never deleted.
 -- Run this in the Supabase SQL editor when you want to clean the app data manually.
 
 BEGIN;
@@ -18,11 +19,7 @@ DELETE FROM public.club_branches;
 -- 5) Remove clubs last.
 DELETE FROM public.clubs;
 
--- 6) Keep only the locked super-admin identity in profiles.
-DELETE FROM public.profiles
-WHERE role IS NOT NULL
-  AND LOWER(role) NOT IN ('super-admin', 'super_admin');
-
+-- 6) Keep the super-admin profile intact; do not delete or modify it.
 INSERT INTO public.profiles (id, club_id, role, full_name, username, password, email, phone, is_active, created_at)
 VALUES (
   '00000000-0000-0000-0000-000000000001',

@@ -1445,7 +1445,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const handleResetAppData = async () => {
-    const confirmed = window.confirm('Uyarı: Bu işlem tüm kulüp verilerini sıfırlar. SUPER ADMIN dışındaki tüm profil, kulüp, öğrenci, başvuru, antrenör, branş, mesaj ve ödeme verileri silinecektir. Devam etmek istiyor musunuz?');
+    const confirmed = window.confirm('Uyarı: Bu işlem sadece kulüp bazlı verileri sıfırlar. Süper Admin hesabı korunur; kulüp, branş, antrenör, başvuru ve öğrenci verileri temizlenir. Devam etmek istiyor musunuz?');
     if (!confirmed) return;
 
     try {
@@ -1453,6 +1453,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
         throw new Error('Supabase bağlantısı mevcut değil.');
       }
 
+      // Safety: the locked super-admin profile remains untouched.
       const tablesToReset = [
         'club_applications',
         'club_students',
