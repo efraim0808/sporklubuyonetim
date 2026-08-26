@@ -304,6 +304,11 @@ function normalizeMessageRecord(message) {
   };
 }
 
+function normalizeCoachIdList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => item !== null && item !== undefined && item !== '');
+}
+
 function normalizeStudentRecord(student) {
   if (!student || typeof student !== 'object') return null;
 
@@ -414,7 +419,7 @@ async function fetchAllClubsFromSupabase() {
       name: branch.name,
       fee: Number(branch.monthly_fee ?? 0),
       monthlyFee: Number(branch.monthly_fee ?? 0),
-      coachIds: Array.isArray(branch.coach_ids) ? branch.coach_ids : [],
+      coachIds: normalizeCoachIdList(Array.isArray(branch.coach_ids) ? branch.coach_ids : (branch.coachIds ?? [])),
       clubId: branch.club_id,
       ...branch,
     });
@@ -1623,7 +1628,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     setClubs((prev) =>
       prev.map((club) => ({
         ...club,
-        branches: club.branches.map((branch) =>
+        branches: (club.branches ?? []).map((branch) =>
           branch.id === branchId ? { ...branch, fee: parsedValue, monthlyFee: parsedValue } : branch
         ),
       }))
@@ -1712,9 +1717,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
         club.id === selectedClubId
           ? {
               ...club,
-              branches: club.branches.map((branch) =>
-                branch.id === validBranchId ? { ...branch, coachIds: [...branch.coachIds, id] } : branch
-              ),
+              branches: (club.branches ?? []).map((branch) => {
+                if (branch.id !== validBranchId) return branch;
+                const safeCoachIds = normalizeCoachIdList(branch.coachIds);
+                return { ...branch, coachIds: [...safeCoachIds, id] };
+              }),
             }
           : club
       )
