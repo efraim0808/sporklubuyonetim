@@ -61,6 +61,27 @@ function generatePassword(length = 12) {
   return result;
 }
 
+function resolveParentPassword(parentPassword, parentPhone = '', parentName = '') {
+  const trimmedPassword = String(parentPassword ?? '').trim();
+  if (trimmedPassword) {
+    return trimmedPassword;
+  }
+
+  const phoneSeed = normalizeWhatsappNumber(parentPhone) || generateUsername(parentName || '') || `VELI-${Date.now()}`;
+  const safeSeed = String(phoneSeed).replace(/[^A-Za-z0-9]/g, '').slice(-8) || 'VELI';
+  return `${safeSeed}${generatePassword(6)}`.slice(0, 18);
+}
+
+function buildParentCredentials({ parentName, parentPhone, parentPassword, username }) {
+  const finalUsername = String(username ?? '').trim() || generateUsername(parentName || '') || normalizeWhatsappNumber(parentPhone) || `VELI-${Date.now()}`;
+  const finalPassword = resolveParentPassword(parentPassword, parentPhone, parentName);
+
+  return {
+    username: finalUsername,
+    password: finalPassword,
+  };
+}
+
 function generateUsername(name) {
   return String(name || '')
     .normalize('NFD')
@@ -373,16 +394,20 @@ async function checkDuplicateRegistrationInSupabase({ clubId, studentName, paren
     return { ok: true };
   }
 
-  const normalizedStudentName = String(studentName ?? '').trim();
-  const normalizedParentName = String(parentName ?? '').trim();
+  const normalizedStudentName = normalizeDuplicateText(studentName);
+  const normalizedParentName = normalizeDuplicateText(parentName);
   const normalizedParentPhone = normalizeWhatsappNumber(parentPhone);
-  const normalizedUsername = String(username ?? '').trim();
+  const normalizedUsername = normalizeDuplicateText(username);
 
   if (!normalizedStudentName && !normalizedParentName && !normalizedParentPhone && !normalizedUsername) {
     return { ok: true };
   }
 
-  const [studentResult, profileResult] = await Promise.all([
+  const [applicationResult, studentResult, profileResult] = await Promise.all([
+    supabase
+      .from('club_applications')
+      .select('id, club_id, student_name, parent_name, parent_phone, status')
+      .eq('club_id', safeClubId),
     supabase
       .from('club_students')
       .select('id, club_id, full_name, parent_name, parent_phone')
@@ -393,6 +418,10 @@ async function checkDuplicateRegistrationInSupabase({ clubId, studentName, paren
       .eq('club_id', safeClubId),
   ]);
 
+  if (applicationResult.error) {
+    console.error('Supabase duplicate application check failed:', applicationResult.error);
+  }
+
   if (studentResult.error) {
     console.error('Supabase duplicate student check failed:', studentResult.error);
   }
@@ -401,23 +430,49 @@ async function checkDuplicateRegistrationInSupabase({ clubId, studentName, paren
     console.error('Supabase duplicate profile check failed:', profileResult.error);
   }
 
+  const duplicateError = new Error('Bu bilgilerle yapılmış mevcut bir başvurunuz bulunmaktadır');
+
   const isDuplicateRecord = (record) => {
     if (!record || typeof record !== 'object') return false;
 
-    const studentMatch = normalizedStudentName && normalizeDuplicateText(record.full_name ?? record.student_name ?? '') === normalizeDuplicateText(normalizedStudentName);
-    const parentNameMatch = normalizedParentName && normalizeDuplicateText(record.parent_name ?? record.full_name ?? '') === normalizeDuplicateText(normalizedParentName);
-    const parentPhoneMatch = normalizedParentPhone && normalizeDuplicateText(normalizeWhatsappNumber(record.parent_phone ?? record.phone ?? '')) === normalizeDuplicateText(normalizedParentPhone);
-    const usernameMatch = normalizedUsername && normalizeDuplicateText(record.username ?? '') === normalizeDuplicateText(normalizedUsername);
+    const recordStudentName = normalizeDuplicateText(record.full_name ?? record.student_name ?? '');
+    const recordParentName = normalizeDuplicateText(record.parent_name ?? record.full_name ?? '');
+    const recordParentPhone = normalizeWhatsappNumber(record.parent_phone ?? record.phone ?? '');
+    const recordUsername = normalizeDuplicateText(record.username ?? '');
+
+    const studentMatch = normalizedStudentName && recordStudentName && recordStudentName === normalizedStudentName;
+    const parentNameMatch = normalizedParentName && recordParentName && recordParentName === normalizedParentName;
+    const parentPhoneMatch = normalizedParentPhone && recordParentPhone && recordParentPhone === normalizedParentPhone;
+    const usernameMatch = normalizedUsername && recordUsername && recordUsername === normalizedUsername;
+
+    if (normalizedStudentName && normalizedParentPhone) {
+      return (studentMatch && parentPhoneMatch) || (parentNameMatch && parentPhoneMatch) || (studentMatch && parentNameMatch);
+    }
 
     return Boolean(studentMatch || parentNameMatch || parentPhoneMatch || usernameMatch);
   };
+
+  const duplicateApplication = (applicationResult.data ?? []).find((record) => {
+    const recordStatus = String(record?.status ?? '').toLowerCase();
+    if (!['pending', 'approved', 'active'].includes(recordStatus)) {
+      return false;
+    }
+    return isDuplicateRecord(record);
+  });
+  if (duplicateApplication) {
+    return {
+      ok: false,
+      duplicate: true,
+      error: duplicateError,
+    };
+  }
 
   const duplicateStudent = (studentResult.data ?? []).find(isDuplicateRecord);
   if (duplicateStudent) {
     return {
       ok: false,
       duplicate: true,
-      error: new Error('Bu öğrenci veya veli bu kulüpte zaten kayıtlı!'),
+      error: duplicateError,
     };
   }
 
@@ -426,7 +481,7 @@ async function checkDuplicateRegistrationInSupabase({ clubId, studentName, paren
     return {
       ok: false,
       duplicate: true,
-      error: new Error('Bu öğrenci veya veli bu kulüpte zaten kayıtlı!'),
+      error: duplicateError,
     };
   }
 
@@ -576,7 +631,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [clubListSearch, setClubListSearch] = useState('');
   const [expandedClubId, setExpandedClubId] = useState(null);
   const [superAdminDetailClubId, setSuperAdminDetailClubId] = useState(null);
-  const [coachForm, setCoachForm] = useState({ name: '', phone: '', branchId: 'branch-futbol', username: '', password: '' });
+  const [coachForm, setCoachForm] = useState({ name: '', phone: '', branchId: '', username: '', password: '' });
   const [announcementForm, setAnnouncementForm] = useState({ target: 'Tüm Okula', title: 'Antrenman İptali', message: '' });
   const [applicationForm, setApplicationForm] = useState(defaultForm);
   const [showKvkkModal, setShowKvkkModal] = useState(false);
@@ -1216,6 +1271,38 @@ function AppClean({ initialPublicClubId = null } = {}) {
     }
   };
 
+  const handleResetAppData = async () => {
+    const confirmed = window.confirm('Uyarı: Bu işlem tüm kulüp verilerini sıfırlar. SUPER ADMIN dışındaki tüm profil, kulüp, öğrenci, başvuru, antrenör, branş, mesaj ve ödeme verileri silinecektir. Devam etmek istiyor musunuz?');
+    if (!confirmed) return;
+
+    try {
+      const { data, error } = await supabase.rpc('reset_app_data');
+      if (error) {
+        console.error('Supabase app reset failed:', error);
+        alert('Sistem sıfırlanamadı. Lütfen veritabanı fonksiyonunu kontrol edin.');
+        return;
+      }
+
+      await loadClubs();
+      setClubs([]);
+      setUsers((prev) => prev.filter((user) => isSuperAdminRole(user) || user.id === lockedSuperAdminUser.id));
+      setSelectedClubId('');
+      setExpandedClubId(null);
+      setSuperAdminDetailClubId(null);
+      setPublicFormClubId(null);
+      setPublicClubDetails(null);
+      if (typeof window !== 'undefined') {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete('club');
+        window.history.replaceState({}, '', nextUrl);
+      }
+      setToastMessage(data?.[0]?.message ?? 'Sistem başarıyla temizlendi.');
+    } catch (error) {
+      console.error('Unexpected app reset error:', error);
+      alert('Sistem sıfırlanırken beklenmeyen bir hata oluştu.');
+    }
+  };
+
   const handleExtendSubscription = (clubId, months, amount) => {
     setClubs((prev) =>
       prev.map((club) => {
@@ -1419,9 +1506,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return;
     }
 
+    const validBranchId = normalizeDbBranchId(coachForm.branchId);
+    if (!validBranchId || !currentClub?.branches?.some((branch) => branch.id === validBranchId)) {
+      alert('Lütfen kulüp branş listesinden bir branş seçiniz.');
+      return;
+    }
+
     const username = coachForm.username || generateUsername(coachForm.name);
     const id = `coach-${Date.now()}`;
-    const branchName = currentClub?.branches?.find((branch) => branch.id === coachForm.branchId)?.name || 'Belirtilmemiş';
+    const branchName = currentClub?.branches?.find((branch) => branch.id === validBranchId)?.name || 'Belirtilmemiş';
     const coachUser = {
       id,
       role: 'coach',
@@ -1429,7 +1522,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       username,
       password: coachForm.password,
       clubId: selectedClubId,
-      branchId: coachForm.branchId,
+      branchId: validBranchId,
       branchName,
       isActive: true,
     };
@@ -1441,7 +1534,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       username,
       password: coachForm.password,
       phone: coachForm.phone,
-      branchId: coachForm.branchId,
+      branchId: validBranchId,
     });
     if (!coachInsertResult.ok) {
       console.error('Supabase coach insert failed.', coachInsertResult.error);
@@ -1457,7 +1550,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       username,
       password: coachForm.password,
       phone: coachForm.phone,
-      branchId: coachForm.branchId,
+      branchId: validBranchId,
       branchName,
       isActive: true,
     });
@@ -1469,15 +1562,78 @@ function AppClean({ initialPublicClubId = null } = {}) {
           ? {
               ...club,
               branches: club.branches.map((branch) =>
-                branch.id === coachForm.branchId ? { ...branch, coachIds: [...branch.coachIds, id] } : branch
+                branch.id === validBranchId ? { ...branch, coachIds: [...branch.coachIds, id] } : branch
               ),
             }
           : club
       )
     );
 
-    setCoachForm({ name: '', phone: '', branchId: 'branch-futbol', username: '', password: '' });
+    setCoachForm({ name: '', phone: '', branchId: '', username: '', password: '' });
     alert('Antrenör kaydedildi.');
+  };
+
+  const handleRejectApplication = async (application) => {
+    if (!application) {
+      console.log('handleRejectApplication: application boş geldi.');
+      return;
+    }
+
+    const appId = String(application.id ?? '');
+    if (!appId) {
+      alert('Reddedilecek başvurunun kimliği eksik.');
+      return;
+    }
+
+    const deleteResult = await deleteFromSupabase('club_applications', 'id', appId);
+    if (deleteResult.ok) {
+      setClubs((prev) =>
+        prev.map((club) =>
+          club.id === currentClub?.id
+            ? {
+                ...club,
+                pendingApplications: (club.pendingApplications ?? []).filter((item) => String(item.id) !== appId),
+              }
+            : club
+        )
+      );
+      setToastMessage('Başvuru reddedildi.');
+      return;
+    }
+
+    console.error('handleRejectApplication: club_applications delete failed.', {
+      table: 'club_applications',
+      applicationId: appId,
+      error: deleteResult.error,
+      errorMessage: deleteResult.error?.message ?? 'No error message provided',
+    });
+
+    const statusUpdateResult = await updateApplicationStatusInSupabase({
+      id: appId,
+      clubId: currentClub?.id || application.clubId,
+      studentName: application.studentName,
+      parentName: application.parentName,
+      parentPhone: application.parentPhone,
+      status: 'rejected',
+    });
+
+    if (!statusUpdateResult.ok) {
+      alert('Başvuru reddedilemedi. Lütfen tekrar deneyin.');
+      return;
+    }
+
+    setClubs((prev) =>
+      prev.map((club) =>
+        club.id === currentClub?.id
+          ? {
+              ...club,
+              pendingApplications: (club.pendingApplications ?? []).filter((item) => String(item.id) !== appId),
+            }
+          : club
+      )
+    );
+
+    setToastMessage('Başvuru reddedildi.');
   };
 
   const handleApproveApplication = async (application) => {
@@ -1493,17 +1649,17 @@ function AppClean({ initialPublicClubId = null } = {}) {
     }
 
     const appId = String(application.id ?? '');
-    const parentUsername = generateUsername(application.parentName || application.username || '') || String(application.username || '').trim() || normalizeWhatsappNumber(application.parentPhone) || `VELI-${Date.now()}`;
-    const parentPassword = String(application.parentPassword ?? '').trim();
+    const parentCredentials = buildParentCredentials({
+      parentName: application.parentName,
+      parentPhone: application.parentPhone,
+      parentPassword: application.parentPassword,
+      username: application.username,
+    });
+    const parentUsername = parentCredentials.username;
+    const parentPassword = parentCredentials.password;
     const normalizedPhone = normalizeWhatsappNumber(application.parentPhone);
 
-    if (!parentPassword) {
-      console.error('handleApproveApplication: parent password missing.', application);
-      alert('Veli şifresi eksik. Kayıt formunda girilen şifre kullanılmalıdır.');
-      return;
-    }
-
-    const insertStudentResult = await persistStudentToSupabase({
+    const insertStudentPayload = {
       clubId: resolvedClubId,
       name: application.studentName,
       parentName: application.parentName,
@@ -1512,18 +1668,56 @@ function AppClean({ initialPublicClubId = null } = {}) {
       birthDate: application.birthDate || '',
       startedAt: new Date().toISOString().slice(0, 10),
       status: 'active',
+      skipDuplicateCheck: true,
+    };
+
+    console.log('handleApproveApplication: attempting club_students insert', {
+      applicationId: appId,
+      clubId: resolvedClubId,
+      branchId: insertStudentPayload.branchId,
+      studentName: insertStudentPayload.name,
+      parentName: insertStudentPayload.parentName,
+      parentPhone: insertStudentPayload.parentPhone,
     });
 
+    const insertStudentResult = await persistStudentToSupabase(insertStudentPayload);
+
     if (!insertStudentResult.ok) {
-      console.error('Supabase student insert failed.', insertStudentResult.error);
+      console.error('handleApproveApplication: club_students insert failed.', {
+        table: 'club_students',
+        schema: {
+          club_id: 'UUID NOT NULL',
+          branch_id: 'UUID NULL',
+          full_name: 'TEXT NOT NULL',
+          parent_name: 'TEXT NULL',
+          parent_phone: 'TEXT NULL',
+          started_at: 'DATE NULL',
+          status: 'TEXT',
+          branch_ids: 'JSONB',
+          branch_status: 'JSONB',
+        },
+        payload: insertStudentPayload,
+        error: insertStudentResult.error,
+        errorMessage: insertStudentResult.error?.message ?? 'No error message provided',
+      });
       if (insertStudentResult.duplicate) {
-        const duplicateMessage = 'Bu öğrenci veya veli bu kulüpte zaten kayıtlı!';
+        const duplicateMessage = 'Bu bilgilerle yapılmış mevcut bir başvurunuz bulunmaktadır';
         setToastMessage(duplicateMessage);
         alert(duplicateMessage);
         return;
       }
       alert('Öğrenci kaydı veritabanına gönderilemedi.');
       return;
+    }
+
+    const deleteApplicationResult = await deleteFromSupabase('club_applications', 'id', appId);
+    if (!deleteApplicationResult.ok) {
+      console.error('handleApproveApplication: club_applications delete failed.', {
+        table: 'club_applications',
+        applicationId: appId,
+        error: deleteApplicationResult.error,
+        errorMessage: deleteApplicationResult.error?.message ?? 'No error message provided',
+      });
     }
 
     const insertParentResult = await persistParentToSupabase({
@@ -1535,21 +1729,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
     });
 
     if (!insertParentResult.ok) {
-      console.warn('Parent profile insert failed; continuing locally.', insertParentResult.error);
-    }
-
-    const approveResult = await updateApplicationStatusInSupabase({
-      id: appId,
-      clubId: resolvedClubId,
-      studentName: application.studentName,
-      parentName: application.parentName,
-      parentPhone: application.parentPhone,
-      status: 'approved',
-    });
-    if (!approveResult.ok) {
-      console.error('Supabase application approval failed.', approveResult.error);
-      alert('Başvurunun onay durumu veritabanında kaydedilemedi.');
-      return;
+      console.warn('Parent profile insert failed; continuing locally.', {
+        error: insertParentResult.error,
+        errorMessage: insertParentResult.error?.message ?? 'No error message provided',
+      });
     }
 
     await loadClubs();
@@ -2097,6 +2280,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
       {superAdminTab === 'statistics' && (
         <div className="card-surface rounded-3xl p-6">
+          <div className="mb-5 flex justify-end">
+            <button
+              type="button"
+              className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-200 transition hover:bg-red-500/20"
+              onClick={handleResetAppData}
+            >
+              Veritabanını Sıfırla
+            </button>
+          </div>
           <div className="grid gap-4 md:grid-cols-2">
             {[
               ['Kulüp Sayısı', clubs.length],
@@ -2531,19 +2723,25 @@ function AppClean({ initialPublicClubId = null } = {}) {
                       return;
                     }
 
+                    if (!(currentClub?.branches ?? []).length) {
+                      alert('Bu kulüp için henüz aktif branş tanımlanmamıştır, lütfen daha sonra tekrar deneyin.');
+                      return;
+                    }
+
                     if (!applicationForm.branchId) {
                       alert('Lütfen bir branş seçiniz.');
                       return;
                     }
 
                     const generatedUsername = generateUsername(applicationForm.parentName || '');
-                    const parentPassword = (applicationForm.parentPassword || '').trim();
-                    if (!parentPassword) {
-                      alert('Veli şifresi mutlaka girilmelidir.');
-                      return;
-                    }
-
-                    const finalUsername = generatedUsername || normalizeWhatsappNumber(applicationForm.parentPhone) || `VELI-${Date.now()}`;
+                    const parentCredentials = buildParentCredentials({
+                      parentName: applicationForm.parentName,
+                      parentPhone: applicationForm.parentPhone,
+                      parentPassword: applicationForm.parentPassword,
+                      username: generatedUsername,
+                    });
+                    const parentPassword = parentCredentials.password;
+                    const finalUsername = parentCredentials.username;
                     const payload = {
                       studentName: applicationForm.studentName.trim(),
                       studentSurname: '',
@@ -2564,7 +2762,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                     if (!dbResult.ok) {
                       console.error('Supabase manager application insert failed.', dbResult.error);
                       if (dbResult.duplicate) {
-                        const duplicateMessage = 'Bu öğrenci veya veli bu kulüpte zaten kayıtlı!';
+                        const duplicateMessage = 'Bu bilgilerle yapılmış mevcut bir başvurunuz bulunmaktadır';
                         setToastMessage(duplicateMessage);
                         alert(duplicateMessage);
                         return;
@@ -2655,7 +2853,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <div className="grid gap-3 md:grid-cols-2">
                 <input className="input-shell" placeholder="Ad Soyad" value={coachForm.name} onChange={(e) => setCoachForm({ ...coachForm, name: e.target.value, username: generateUsername(e.target.value) })} />
                 <input className="input-shell" placeholder="İletişim" value={coachForm.phone} onChange={(e) => setCoachForm({ ...coachForm, phone: e.target.value })} />
-                <select className="input-shell" value={coachForm.branchId} onChange={(e) => setCoachForm({ ...coachForm, branchId: e.target.value })}>
+                <select className="input-shell" value={coachForm.branchId || ''} onChange={(e) => setCoachForm({ ...coachForm, branchId: e.target.value })}>
+                  <option value="" disabled>Branş Seçiniz</option>
                   {currentClub?.branches.map((branch) => (
                     <option key={branch.id} value={branch.id}>{branch.name}</option>
                   ))}
@@ -2812,10 +3011,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
                       <span className="status-pill bg-amber-500/15 text-amber-300">Bekliyor</span>
                     </div>
                     <div className="mt-3 text-sm text-slate-300">Branş: {currentClub.branches.find((b) => b.id === application.branchId)?.name}</div>
-                    <button className="primary-btn mt-4 w-full sm:w-auto" onClick={() => {
-                      console.log('Onay butonuna tıklandı:', application.id);
-                      handleApproveApplication(application);
-                    }}>Onayla</button>
+                    <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <button className="primary-btn w-full sm:w-auto" onClick={() => {
+                        console.log('Onay butonuna tıklandı:', application.id);
+                        handleApproveApplication(application);
+                      }}>Onayla</button>
+                      <button className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20" onClick={() => {
+                        console.log('Reddet butonuna tıklandı:', application.id);
+                        handleRejectApplication(application);
+                      }}>Reddet</button>
+                    </div>
                   </div>
                 ))
               ) : (
@@ -4017,19 +4222,21 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const persistCoachToSupabase = async ({ clubId, name, username, password, phone, branchId }) => {
+    const safeClubId = normalizeDbClubId(clubId || selectedClubId);
+    const safeBranchId = normalizeDbBranchId(branchId);
     const record = {
-      club_id: normalizeDbClubId(clubId || selectedClubId),
+      club_id: safeClubId,
       name: String(name || '').trim(),
       username: String(username || '').trim(),
       password: String(password || '').trim(),
       phone: String(phone || '').trim() || null,
-      branch_id: normalizeDbBranchId(branchId),
+      branch_id: safeBranchId,
       is_active: true,
       created_at: new Date().toISOString(),
     };
 
-    if (!record.club_id || !record.name || !record.username) {
-      return { ok: false, error: new Error('Antrenör için gerekli alanlar eksik.') };
+    if (!record.club_id || !record.name || !record.username || !record.branch_id) {
+      return { ok: false, error: new Error('Antrenör için geçerli bir kulüp ve branş seçimi zorunludur.') };
     }
 
     return insertIntoSupabase('club_coaches', [record]);
@@ -4037,6 +4244,29 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
   const persistApplicationToSupabase = async (payload) => {
     const clubId = normalizeDbClubId(payload.clubId || validPublicFormClubId || publicFormClubId || initialPublicClubId || selectedClubId || currentUser?.clubId || '');
+    if (!clubId) {
+      return { ok: false, error: new Error('Kulüp bilgisi bulunamadı.') };
+    }
+
+    if (supabase && supabase.from) {
+      const { data: branchRows, error: branchError } = await supabase
+        .from('club_branches')
+        .select('id')
+        .eq('club_id', clubId)
+        .limit(1);
+
+      if (branchError) {
+        console.error('Supabase branch availability check failed:', branchError);
+      }
+
+      if (!branchRows || !branchRows.length) {
+        return {
+          ok: false,
+          error: new Error('Bu kulüp için henüz aktif branş tanımlanmamıştır, lütfen daha sonra tekrar deneyin.'),
+        };
+      }
+    }
+
     const record = {
       club_id: clubId,
       student_name: String(payload.studentName || '').trim(),
@@ -4073,53 +4303,85 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return insertIntoSupabase('club_applications', [record]);
   };
 
-  const persistStudentToSupabase = async ({ clubId, name, parentName, parentPhone, branchId, birthDate, startedAt, status = 'active' }) => {
+  const persistStudentToSupabase = async ({ clubId, name, parentName, parentPhone, branchId, birthDate, startedAt, status = 'active', skipDuplicateCheck = false }) => {
+    const safeClubId = normalizeDbClubId(clubId);
+    const safeBranchId = normalizeDbBranchId(branchId);
     const record = {
-      club_id: normalizeDbClubId(clubId),
-      branch_id: normalizeDbBranchId(branchId),
+      club_id: safeClubId,
+      branch_id: safeBranchId,
       full_name: String(name || '').trim(),
       birth_date: birthDate || null,
       parent_name: String(parentName || '').trim(),
       parent_phone: String(parentPhone || '').trim(),
       started_at: startedAt || new Date().toISOString().slice(0, 10),
       status,
-      branch_ids: Array.isArray(branchId) ? branchId : [branchId].filter(Boolean),
-      branch_status: branchId ? { [branchId]: status } : {},
+      branch_ids: safeBranchId ? [safeBranchId] : [],
+      branch_status: safeBranchId ? { [safeBranchId]: status } : {},
       attendance: [],
       created_at: new Date().toISOString(),
     };
 
     if (!record.full_name || !record.club_id) {
-      return { ok: false, error: new Error('Öğrenci kaydı için gerekli alanlar eksik.') };
+      return { ok: false, error: new Error('Öğrenci kaydı için gerekli alanlar eksik. club_id geçerli UUID değil.') };
     }
 
-    const duplicateCheck = await checkDuplicateRegistrationInSupabase({
-      clubId: record.club_id,
-      studentName: record.full_name,
-      parentName: record.parent_name,
-      parentPhone: record.parent_phone,
+    console.log('persistStudentToSupabase payload:', {
+      club_id: record.club_id,
+      branch_id: record.branch_id,
+      full_name: record.full_name,
+      parent_name: record.parent_name,
+      parent_phone: record.parent_phone,
+      status: record.status,
+      started_at: record.started_at,
+      branch_ids: record.branch_ids,
+      branch_status: record.branch_status,
+      skipDuplicateCheck,
     });
 
-    if (!duplicateCheck.ok) {
-      return {
-        ok: false,
-        duplicate: true,
-        error: duplicateCheck.error || new Error('Bu öğrenci veya veli bu kulüpte zaten kayıtlı!'),
-      };
+    if (!skipDuplicateCheck) {
+      const duplicateCheck = await checkDuplicateRegistrationInSupabase({
+        clubId: record.club_id,
+        studentName: record.full_name,
+        parentName: record.parent_name,
+        parentPhone: record.parent_phone,
+      });
+
+      if (!duplicateCheck.ok) {
+        return {
+          ok: false,
+          duplicate: true,
+          error: duplicateCheck.error || new Error('Bu öğrenci veya veli bu kulüpte zaten kayıtlı!'),
+        };
+      }
     }
 
-    return insertIntoSupabase('club_students', [record]);
+    const result = await insertIntoSupabase('club_students', [record]);
+    if (!result.ok && result.error) {
+      console.error('persistStudentToSupabase: club_students insert failed', {
+        table: 'club_students',
+        payload: {
+          club_id: record.club_id,
+          branch_id: record.branch_id,
+          full_name: record.full_name,
+          parent_name: record.parent_name,
+          parent_phone: record.parent_phone,
+        },
+        errorMessage: result.error.message,
+        fullError: result.error,
+      });
+    }
+    return result;
   };
 
   const persistParentToSupabase = async ({ clubId, name, phone, username, password }) => {
-    const enteredPassword = String(password ?? '').trim();
+    const enteredPassword = resolveParentPassword(password, phone, name);
     const generatedUsername = generateUsername(name || username || '') || String(username || '').trim() || `VELI-${Date.now()}`;
     const record = {
       club_id: normalizeDbClubId(clubId),
       role: 'parent',
       full_name: String(name || '').trim(),
       username: String(generatedUsername || '').trim() || null,
-      password: enteredPassword || null,
+      password: enteredPassword,
       email: normalizeDbParentEmail(name, clubId),
       phone: String(phone || '').trim() || null,
       is_active: true,
@@ -4128,10 +4390,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     if (!record.club_id || !record.full_name) {
       return { ok: false, error: new Error('Veli kaydı için kulüp ve ad gerekli.') };
-    }
-
-    if (!record.password) {
-      return { ok: false, error: new Error('Veli şifresi boş olamaz; formdaki girilen değer kullanılmalıdır.') };
     }
 
     return insertIntoSupabase('profiles', [record]);
@@ -4172,7 +4430,19 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const { data, error } = await currentQuery.select();
 
     if (error) {
-      console.error('Supabase application status update failed:', error);
+      console.error('Supabase application status update failed:', {
+        queryTarget: 'club_applications',
+        resolvedStatus,
+        applicationId: normalizedAppId,
+        applicationRef: {
+          clubId: normalizeDbClubId(applicationRef?.clubId),
+          studentName: String(applicationRef?.studentName || '').trim(),
+          parentName: String(applicationRef?.parentName || '').trim(),
+          parentPhone: String(applicationRef?.parentPhone || '').trim(),
+        },
+        errorMessage: error?.message ?? 'No error message provided',
+        fullError: error,
+      });
       return { ok: false, error };
     }
 
@@ -4195,18 +4465,35 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return { ok: true, data: data ?? [] };
   };
 
-  const renderApplicationForm = () => (
-    <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="card-surface rounded-[32px] p-6 md:p-8">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <p className="text-sm text-slate-400">Online Kayıt Formu</p>
-            <h2 className="text-3xl font-bold text-white">{formClub?.name}</h2>
-          </div>
-          <div className="rounded-full border border-violet-500/40 bg-violet-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-violet-200">KVKK Onayı Zorunlu</div>
-        </div>
+  const renderApplicationForm = () => {
+    const hasFormBranches = (formClub?.branches ?? []).length > 0;
 
-        <div className="grid gap-5 md:grid-cols-2">
+    if (!hasFormBranches) {
+      return (
+        <div className="mx-auto max-w-3xl px-4 py-12">
+          <div className="card-surface rounded-[32px] border border-amber-500/40 bg-slate-900/80 p-8 text-center">
+            <div className="mb-3 text-4xl">⚠️</div>
+            <h2 className="text-2xl font-bold text-white">Branş Tanımlanmamış</h2>
+            <p className="mt-3 text-base text-slate-300">
+              Bu kulüp için henüz aktif branş tanımlanmamıştır, lütfen daha sonra tekrar deneyin.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="mx-auto max-w-5xl px-4 py-8">
+        <div className="card-surface rounded-[32px] p-6 md:p-8">
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-slate-400">Online Kayıt Formu</p>
+              <h2 className="text-3xl font-bold text-white">{formClub?.name}</h2>
+            </div>
+            <div className="rounded-full border border-violet-500/40 bg-violet-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-violet-200">KVKK Onayı Zorunlu</div>
+          </div>
+
+          <div className="grid gap-5 md:grid-cols-2">
           <input className="input-shell" placeholder="Kulüp" value={formClub?.name} disabled />
           <input
             className="input-shell"
@@ -4262,17 +4549,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
               return;
             }
 
-            const generatedUsername = generateUsername(applicationForm.parentName || '');
-            const targetClubId = validPublicFormClubId || publicFormClubId || initialPublicClubId || getClubById(selectedClubId)?.id || null;
-            const parentPassword = (applicationForm.parentPassword || '').trim();
-
-            if (!targetClubId) {
-              alert('Kulüp bilgisi bulunamadı. Lütfen URL üzerinden doğru kayıt formunu açın.');
+            if (!(formClub?.branches ?? []).length) {
+              alert('Bu kulüp için henüz aktif branş tanımlanmamıştır, lütfen daha sonra tekrar deneyin.');
               return;
             }
 
-            if (!parentPassword) {
-              alert('Veli şifresi mutlaka girilmelidir.');
+            const generatedUsername = generateUsername(applicationForm.parentName || '');
+            const targetClubId = validPublicFormClubId || publicFormClubId || initialPublicClubId || getClubById(selectedClubId)?.id || null;
+
+            if (!targetClubId) {
+              alert('Kulüp bilgisi bulunamadı. Lütfen URL üzerinden doğru kayıt formunu açın.');
               return;
             }
 
@@ -4281,7 +4567,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
               return;
             }
 
-            const finalUsername = generatedUsername || normalizeWhatsappNumber(applicationForm.parentPhone) || `VELI-${Date.now()}`;
+            const parentCredentials = buildParentCredentials({
+              parentName: applicationForm.parentName,
+              parentPhone: applicationForm.parentPhone,
+              parentPassword: applicationForm.parentPassword,
+              username: generatedUsername,
+            });
+            const parentPassword = parentCredentials.password;
+            const finalUsername = parentCredentials.username;
             const payload = {
               studentName: applicationForm.studentName.trim(),
               studentSurname: '',
@@ -4302,7 +4595,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
             if (!dbResult.ok) {
               console.error('Supabase application insert failed.', dbResult.error);
               if (dbResult.duplicate) {
-                const duplicateMessage = 'Bu öğrenci veya veli bu kulüpte zaten kayıtlı!';
+                const duplicateMessage = 'Bu bilgilerle yapılmış mevcut bir başvurunuz bulunmaktadır';
                 setToastMessage(duplicateMessage);
                 alert(duplicateMessage);
                 return;
@@ -4364,7 +4657,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
         </button>
       </div>
     </div>
-  );
+    );
+  };
 
   if (!currentUser) {
     if (forcedPublicClubId || isPublicRegistrationRoute || shouldShowPublicForm) {

@@ -166,6 +166,38 @@ CREATE POLICY "club_notifications_all_access" ON club_notifications FOR ALL USIN
 CREATE POLICY "club_messages_all_access" ON club_messages FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "club_applications_all_access" ON club_applications FOR ALL USING (true) WITH CHECK (true);
 
+CREATE OR REPLACE FUNCTION public.reset_app_data()
+RETURNS TABLE(message text)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  DELETE FROM public.profiles
+  WHERE role IS NOT NULL
+    AND LOWER(role) NOT IN ('super-admin', 'super_admin');
+
+  TRUNCATE TABLE public.club_messages, public.club_announcements, public.club_payments,
+    public.club_students, public.club_branches, public.club_coaches,
+    public.club_applications, public.clubs RESTART IDENTITY CASCADE;
+
+  INSERT INTO public.profiles (id, club_id, role, full_name, username, password, email, phone, is_active, created_at)
+  VALUES (
+    gen_random_uuid(),
+    NULL,
+    'super-admin',
+    'Süper Admin',
+    'sagliksk@gmail.com',
+    'Efraim+08',
+    'sagliksk@gmail.com',
+    NULL,
+    true,
+    NOW()
+  )
+  ON CONFLICT DO NOTHING;
+
+  RETURN QUERY SELECT 'System reset complete. Only the locked super-admin remains.'::text;
+END;
+$$;
+
 COMMIT;
 
 -- The system is intentionally left empty and ready for real data entry.
