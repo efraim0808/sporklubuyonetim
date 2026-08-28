@@ -889,7 +889,30 @@ function AppClean({ initialPublicClubId = null } = {}) {
     );
   }, [sessionHydrated, currentUser, activeRole, selectedClubId]);
 
-  const getClubById = (clubId) => clubs.find((club) => club.id === clubId) ?? null;
+  const getClubById = (clubId) => {
+    if (!clubId) return null;
+    const searchId = String(clubId).trim();
+    if (!searchId) return null;
+
+    return clubs.find((club) => club.id === searchId || normalizeDbClubId(club.id) === normalizeDbClubId(searchId)) ?? null;
+  };
+
+  const reconcileSelectedClubId = (preferredClubId) => {
+    const explicitClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
+    const candidateList = [preferredClubId, explicitClubId, selectedClubId, currentUser?.clubId, clubs[0]?.id];
+
+    for (const candidate of candidateList) {
+      const candidateValue = typeof candidate === 'string' ? candidate.trim() : '';
+      if (!candidateValue) continue;
+
+      const match = clubs.find((club) => club.id === candidateValue || normalizeDbClubId(club.id) === normalizeDbClubId(candidateValue));
+      if (match) {
+        return match.id;
+      }
+    }
+
+    return clubs[0]?.id ?? '';
+  };
 
   const loadClubs = async () => {
     const nextClubs = await fetchAllClubsFromSupabase();
@@ -898,14 +921,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const explicitClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
 
     if (explicitClubId) {
-      setSelectedClubId(explicitClubId);
+      const resolvedClubId = reconcileSelectedClubId(explicitClubId);
+      setSelectedClubId(resolvedClubId || explicitClubId || '');
       return;
     }
 
     if (nextClubs.length) {
-      const firstClubId = nextClubs[0]?.id ?? '';
-      const shouldSelectCurrent = selectedClubId && nextClubs.some((club) => club.id === selectedClubId);
-      setSelectedClubId(shouldSelectCurrent ? selectedClubId : firstClubId);
+      const nextClubId = reconcileSelectedClubId(selectedClubId);
+      setSelectedClubId(nextClubId || nextClubs[0]?.id || '');
     } else {
       setSelectedClubId('');
     }
@@ -968,14 +991,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
       const explicitClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
 
       if (explicitClubId) {
-        setSelectedClubId(explicitClubId);
+        const resolvedClubId = reconcileSelectedClubId(explicitClubId);
+        setSelectedClubId(resolvedClubId || explicitClubId || '');
         return;
       }
 
       if (nextClubs.length) {
-        const firstClubId = nextClubs[0]?.id ?? '';
-        const shouldSelectCurrent = selectedClubId && nextClubs.some((club) => club.id === selectedClubId);
-        setSelectedClubId(shouldSelectCurrent ? selectedClubId : firstClubId);
+        const nextClubId = reconcileSelectedClubId(selectedClubId);
+        setSelectedClubId(nextClubId || nextClubs[0]?.id || '');
       } else {
         setSelectedClubId('');
       }
@@ -1023,6 +1046,18 @@ function AppClean({ initialPublicClubId = null } = {}) {
   useEffect(() => {
     if (!clubs.length) return;
 
+    const validSelectedClubId = selectedClubId && clubs.some((club) => club.id === selectedClubId || normalizeDbClubId(club.id) === normalizeDbClubId(selectedClubId));
+    if (!validSelectedClubId) {
+      setSelectedClubId(clubs[0]?.id ?? '');
+      return;
+    }
+
+    const matchedClub = clubs.find((club) => club.id === selectedClubId || normalizeDbClubId(club.id) === normalizeDbClubId(selectedClubId));
+    if (matchedClub && matchedClub.id !== selectedClubId) {
+      setSelectedClubId(matchedClub.id);
+      return;
+    }
+
     const initialClubId = currentUser?.clubId || selectedClubId || clubs[0]?.id || '';
     if (!coachViewClubId && initialClubId) {
       setCoachViewClubId(initialClubId);
@@ -1065,7 +1100,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
     let isCancelled = false;
 
     const loadCoachProfiles = async () => {
-      const activeClubId = normalizeDbClubId(selectedClubId || currentUser?.clubId || clubs[0]?.id || '');
+      const resolvedSelectedClubId = resolveClubId(selectedClubId || currentUser?.clubId || clubs[0]?.id || '');
+      const activeClubId = normalizeDbClubId(resolvedSelectedClubId || currentUser?.clubId || clubs[0]?.id || '');
+
+      if (resolvedSelectedClubId && resolvedSelectedClubId !== selectedClubId) {
+        setSelectedClubId(resolvedSelectedClubId);
+      }
 
       try {
         let profileQuery = supabase
@@ -1188,12 +1228,19 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const resolveClubId = (preferredClubId) => {
     const explicitClubId = publicFormClubId || initialPublicClubId || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('club') : null);
     if (explicitClubId) {
-      return explicitClubId;
+      const explicitMatch = clubs.find((club) => club.id === String(explicitClubId).trim() || normalizeDbClubId(club.id) === normalizeDbClubId(String(explicitClubId).trim()));
+      if (explicitMatch) {
+        return explicitMatch.id;
+      }
     }
 
     const candidateList = [preferredClubId, selectedClubId, currentUser?.clubId, clubs[0]?.id];
-    const validId = candidateList.find((candidate) => candidate && getClubById(candidate));
-    return validId ?? clubs[0]?.id ?? null;
+    const validId = candidateList.find((candidate) => {
+      if (!candidate) return false;
+      const searchId = String(candidate).trim();
+      return Boolean(searchId && clubs.some((club) => club.id === searchId || normalizeDbClubId(club.id) === normalizeDbClubId(searchId)));
+    });
+    return validId ? String(validId).trim() : clubs[0]?.id ?? null;
   };
 
   useEffect(() => {
