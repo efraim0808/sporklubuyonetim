@@ -182,19 +182,20 @@ async function insertIntoSupabase(table, rows, options = {}) {
       delete cleanRow.id;
     }
 
-    if (table === 'club_messages') {
-      const allowedMessageKeys = new Set([
-        'id',
-        'club_id',
-        'sender_name',
-        'sender_role',
-        'student_name',
-        'message',
-        'created_at',
-      ]);
+    const allowedKeysByTable = {
+      clubs: new Set(['id', 'name', 'manager_name', 'phone', 'whatsapp_number', 'address', 'username', 'password', 'suspended', 'subscription', 'created_at']),
+      profiles: new Set(['id', 'club_id', 'auth_user_id', 'role', 'full_name', 'username', 'password', 'email', 'phone', 'is_active', 'created_at']),
+      club_branches: new Set(['id', 'club_id', 'name', 'monthly_fee', 'created_at']),
+      club_coaches: new Set(['id', 'club_id', 'name', 'username', 'password', 'phone', 'branch_id', 'is_active', 'created_at']),
+      club_students: new Set(['id', 'club_id', 'branch_id', 'full_name', 'birth_date', 'parent_name', 'parent_phone', 'started_at', 'status', 'branch_ids', 'branch_status', 'attendance', 'created_at']),
+      club_applications: new Set(['id', 'club_id', 'student_name', 'student_surname', 'birth_date', 'parent_name', 'parent_phone', 'branch_id', 'status', 'notes', 'files', 'created_at']),
+      club_messages: new Set(['id', 'club_id', 'sender_name', 'sender_role', 'student_id', 'student_name', 'message', 'read', 'created_at']),
+    };
 
+    const allowedKeys = allowedKeysByTable[table] ?? null;
+    if (allowedKeys) {
       Object.keys(cleanRow).forEach((key) => {
-        if (!allowedMessageKeys.has(key)) {
+        if (!allowedKeys.has(key)) {
           delete cleanRow[key];
         }
       });
@@ -1842,8 +1843,17 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return;
     }
 
+    const resolvedClubId = resolveClubId(selectedClubId || currentUser?.clubId || clubs[0]?.id || '');
+    const safeClubId = normalizeDbClubId(resolvedClubId) || normalizeDbClubId(currentClub?.id) || normalizeDbClubId(currentUser?.clubId) || normalizeDbClubId(clubs[0]?.id);
+    const clubContext = clubs.find((club) => club.id === safeClubId) ?? currentClub ?? clubs[0] ?? null;
+
+    if (!safeClubId || !clubContext) {
+      alert('Antrenör kaydı için geçerli bir kulüp seçimi gereklidir.');
+      return;
+    }
+
     const validBranchId = normalizeDbBranchId(coachForm.branchId);
-    if (!validBranchId || !currentClub?.branches?.some((branch) => branch.id === validBranchId)) {
+    if (!validBranchId || !clubContext?.branches?.some((branch) => branch.id === validBranchId)) {
       alert('Lütfen kulüp branş listesinden bir branş seçiniz.');
       return;
     }
@@ -1855,14 +1865,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
     }
 
     const id = `coach-${Date.now()}`;
-    const branchName = currentClub?.branches?.find((branch) => branch.id === validBranchId)?.name || 'Belirtilmemiş';
+    const branchName = clubContext?.branches?.find((branch) => branch.id === validBranchId)?.name || 'Belirtilmemiş';
     const coachUser = {
       id,
       role: 'coach',
       name: coachForm.name,
       username,
       password: coachForm.password,
-      clubId: selectedClubId,
+      clubId: safeClubId,
       branchId: validBranchId,
       branchName,
       isActive: true,
@@ -1870,7 +1880,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     console.group('Coach create flow');
     console.log('Step 1: create coach profile in profiles table', {
-      clubId: selectedClubId,
+      clubId: safeClubId,
       role: 'coach',
       fullName: coachForm.name,
       username,
@@ -1880,7 +1890,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const profileInsertResult = await persistProfileToSupabase({
       id,
-      clubId: selectedClubId,
+      clubId: safeClubId,
       role: 'coach',
       fullName: coachForm.name,
       username,
@@ -1900,7 +1910,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     console.log('Step 2: create club_coaches row using saved profile metadata', {
       profileId,
-      clubId: selectedClubId,
+      clubId: safeClubId,
       branchId: validBranchId,
       username,
       name: coachForm.name,
@@ -1909,7 +1919,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const coachInsertResult = await persistCoachToSupabase({
       id: profileId,
       profileId,
-      clubId: selectedClubId,
+      clubId: safeClubId,
       name: coachForm.name,
       username,
       password: coachForm.password,
@@ -4810,23 +4820,35 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const persistProfileToSupabase = async ({ clubId, role, fullName, username, password, phone, isActive = true }) => {
-    const safeClubId = normalizeDbClubId(clubId);
+    const resolvedClubId = normalizeDbClubId(clubId) || normalizeDbClubId(resolveClubId(clubId || currentUser?.clubId || selectedClubId || clubs[0]?.id || '')) || normalizeDbClubId(currentUser?.clubId) || normalizeDbClubId(clubs[0]?.id);
+    const safeClubId = resolvedClubId;
     const safeRole = String(role || 'parent').trim();
     const safeFullName = String(fullName || '').trim();
     const generatedUsername = buildGeneratedUsernameFromName(username, fullName) || null;
     const safeUsername = String(generatedUsername || '').trim() || null;
     const safePassword = String(password || '').trim() || null;
-    const record = {
-      club_id: safeClubId,
-      role: safeRole,
-      full_name: safeFullName,
-      username: safeUsername,
-      password: safePassword,
-      email: null,
-      phone: String(phone || '').trim() || null,
-      is_active: Boolean(isActive),
-      created_at: new Date().toISOString(),
-    };
+    const allowedProfileKeys = ['id', 'club_id', 'auth_user_id', 'role', 'full_name', 'username', 'password', 'email', 'phone', 'is_active', 'created_at'];
+    const record = Object.fromEntries(
+      Object.entries({
+        id: undefined,
+        club_id: safeClubId,
+        auth_user_id: undefined,
+        role: safeRole,
+        full_name: safeFullName,
+        username: safeUsername,
+        password: safePassword,
+        email: null,
+        phone: String(phone || '').trim() || null,
+        is_active: Boolean(isActive),
+        created_at: new Date().toISOString(),
+      }).filter(([, value]) => value !== undefined)
+    );
+
+    Object.keys(record).forEach((key) => {
+      if (!allowedProfileKeys.includes(key)) {
+        delete record[key];
+      }
+    });
 
     if (!record.full_name || !record.club_id) {
       return { ok: false, error: new Error('Profil kaydı için gerekli alanlar eksik.') };
