@@ -111,9 +111,13 @@ CREATE TABLE IF NOT EXISTS club_notifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
   user_id UUID,
+  type TEXT NOT NULL DEFAULT 'notification',
   text TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.club_notifications
+  ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'notification';
 
 CREATE TABLE IF NOT EXISTS club_messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
