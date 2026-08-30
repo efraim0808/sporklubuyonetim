@@ -146,8 +146,12 @@ CREATE TABLE IF NOT EXISTS club_applications (
   status TEXT NOT NULL DEFAULT 'pending',
   notes TEXT,
   files JSONB DEFAULT '[]'::jsonb,
+  password TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.club_applications
+  ADD COLUMN IF NOT EXISTS password TEXT;
 
 ALTER TABLE clubs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;

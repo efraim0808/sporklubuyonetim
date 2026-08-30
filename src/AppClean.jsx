@@ -179,7 +179,7 @@ async function insertIntoSupabase(table, rows, options = {}) {
       club_branches: new Set(['id', 'club_id', 'name', 'monthly_fee', 'created_at']),
       club_coaches: new Set(['id', 'club_id', 'name', 'username', 'password', 'phone', 'branch_id', 'is_active', 'created_at']),
       club_students: new Set(['id', 'club_id', 'branch_id', 'full_name', 'birth_date', 'parent_name', 'parent_phone', 'started_at', 'status', 'branch_ids', 'branch_status', 'attendance', 'created_at']),
-      club_applications: new Set(['id', 'club_id', 'student_name', 'student_surname', 'birth_date', 'parent_name', 'parent_phone', 'branch_id', 'status', 'notes', 'files', 'created_at']),
+      club_applications: new Set(['id', 'club_id', 'student_name', 'student_surname', 'birth_date', 'parent_name', 'parent_phone', 'branch_id', 'status', 'notes', 'files', 'password', 'created_at']),
       club_messages: new Set(['id', 'club_id', 'sender_name', 'sender_role', 'student_id', 'student_name', 'message', 'read', 'created_at']),
       club_notifications: new Set(['id', 'club_id', 'user_id', 'type', 'text', 'created_at']),
     };
@@ -283,6 +283,15 @@ function normalizeClubRecord(club) {
 function normalizeApplicationRecord(application) {
   if (!application || typeof application !== 'object') return null;
 
+  const resolvedPassword = String(
+    application.password ??
+    application.parent_password ??
+    application.veli_sifresi ??
+    application.parentPassword ??
+    application.parent_password ??
+    ''
+  ).trim();
+
   return {
     ...application,
     id: application.id,
@@ -291,6 +300,8 @@ function normalizeApplicationRecord(application) {
     parentName: application.parent_name ?? application.parentName ?? '',
     parentPhone: application.parent_phone ?? application.parentPhone ?? '',
     branchId: application.branch_id ?? application.branchId ?? '',
+    password: resolvedPassword,
+    parentPassword: resolvedPassword,
     status: application.status ?? 'pending',
     notes: application.notes ?? '',
     files: Array.isArray(application.files) ? application.files : [],
@@ -5188,6 +5199,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
     }
 
     const normalizedNameParts = splitStudentNameParts(String(payload.studentName || '').trim(), String(payload.studentSurname || '').trim());
+    const rawApplicationPassword = String(
+      payload.password ??
+      payload.parentPassword ??
+      payload.veli_sifresi ??
+      payload.parent_password ??
+      payload.parentPassword ??
+      ''
+    ).trim();
+    const fallbackPassword = rawApplicationPassword || generatePassword(12);
     const record = {
       club_id: clubId,
       student_name: String(normalizedNameParts.studentName || '').trim(),
@@ -5199,6 +5219,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       status: 'pending',
       notes: String(payload.notes || '').trim() || null,
       files: Array.isArray(payload.files) ? payload.files : ['sağlık_raporu.pdf'],
+      password: fallbackPassword,
       created_at: new Date().toISOString(),
     };
 
