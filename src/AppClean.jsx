@@ -564,6 +564,20 @@ function normalizeDuplicateText(value) {
     .replace(/\s+/g, '');
 }
 
+function normalizeBirthDateValue(value) {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+
+  const raw = String(value).trim();
+  if (!raw) {
+    return '';
+  }
+
+  const isoLike = raw.split('T')[0];
+  return isoLike || raw;
+}
+
 function normalizeCoachIdentity({ name, username, branchId }) {
   return {
     name: normalizeDuplicateText(name),
@@ -572,7 +586,7 @@ function normalizeCoachIdentity({ name, username, branchId }) {
   };
 }
 
-async function checkDuplicateRegistrationInSupabase({ clubId, studentName, parentName, parentPhone, username }) {
+async function checkDuplicateRegistrationInSupabase({ clubId, studentName, birthDate, parentName, parentPhone, username }) {
   const safeClubId = normalizeDbClubId(clubId);
   if (!safeClubId) {
     return { ok: true };
@@ -583,22 +597,23 @@ async function checkDuplicateRegistrationInSupabase({ clubId, studentName, paren
   }
 
   const normalizedStudentName = normalizeDuplicateText(studentName);
+  const normalizedBirthDate = normalizeBirthDateValue(birthDate);
   const normalizedParentName = normalizeDuplicateText(parentName);
   const normalizedParentPhone = normalizeWhatsappNumber(parentPhone);
   const normalizedUsername = normalizeDuplicateText(username);
 
-  if (!normalizedStudentName && !normalizedParentName && !normalizedParentPhone && !normalizedUsername) {
+  if (!normalizedStudentName || !normalizedBirthDate) {
     return { ok: true };
   }
 
   const [applicationResult, studentResult, profileResult] = await Promise.all([
     supabase
       .from('club_applications')
-      .select('id, club_id, student_name, parent_name, parent_phone, status')
+      .select('id, club_id, student_name, birth_date, parent_name, parent_phone, status')
       .eq('club_id', safeClubId),
     supabase
       .from('club_students')
-      .select('id, club_id, full_name, parent_name, parent_phone')
+      .select('id, club_id, full_name, birth_date, parent_name, parent_phone')
       .eq('club_id', safeClubId),
     supabase
       .from('profiles')
@@ -624,20 +639,16 @@ async function checkDuplicateRegistrationInSupabase({ clubId, studentName, paren
     if (!record || typeof record !== 'object') return false;
 
     const recordStudentName = normalizeDuplicateText(record.full_name ?? record.student_name ?? '');
-    const recordParentName = normalizeDuplicateText(record.parent_name ?? record.full_name ?? '');
-    const recordParentPhone = normalizeWhatsappNumber(record.parent_phone ?? record.phone ?? '');
-    const recordUsername = normalizeDuplicateText(record.username ?? '');
+    const recordBirthDate = normalizeBirthDateValue(record.birth_date ?? record.birthDate ?? '');
 
-    const studentMatch = normalizedStudentName && recordStudentName && recordStudentName === normalizedStudentName;
-    const parentNameMatch = normalizedParentName && recordParentName && recordParentName === normalizedParentName;
-    const parentPhoneMatch = normalizedParentPhone && recordParentPhone && recordParentPhone === normalizedParentPhone;
-    const usernameMatch = normalizedUsername && recordUsername && recordUsername === normalizedUsername;
-
-    if (normalizedStudentName && normalizedParentPhone) {
-      return (studentMatch && parentPhoneMatch) || (parentNameMatch && parentPhoneMatch) || (studentMatch && parentNameMatch);
+    if (!recordStudentName || !recordBirthDate) {
+      return false;
     }
 
-    return Boolean(studentMatch || parentNameMatch || parentPhoneMatch || usernameMatch);
+    const sameStudent = recordStudentName === normalizedStudentName;
+    const sameBirthDate = recordBirthDate === normalizedBirthDate;
+
+    return sameStudent && sameBirthDate;
   };
 
   const duplicateApplication = (applicationResult.data ?? []).find((record) => {
@@ -664,7 +675,14 @@ async function checkDuplicateRegistrationInSupabase({ clubId, studentName, paren
     };
   }
 
-  const duplicateProfile = (profileResult.data ?? []).find(isDuplicateRecord);
+  const duplicateProfile = (profileResult.data ?? []).find((record) => {
+    if (!record || typeof record !== 'object') return false;
+
+    const profileName = normalizeDuplicateText(record.full_name ?? record.student_name ?? '');
+    const profileBirth = normalizeBirthDateValue(record.birth_date ?? record.birthDate ?? '');
+
+    return profileName === normalizedStudentName && profileBirth === normalizedBirthDate;
+  });
   if (duplicateProfile) {
     return {
       ok: false,
@@ -5230,6 +5248,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const duplicateCheck = await checkDuplicateRegistrationInSupabase({
       clubId: record.club_id,
       studentName: record.student_name,
+      birthDate: record.birth_date,
       parentName: record.parent_name,
       parentPhone: record.parent_phone,
       username: String(payload.username || '').trim(),
@@ -5285,6 +5304,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       const duplicateCheck = await checkDuplicateRegistrationInSupabase({
         clubId: record.club_id,
         studentName: record.full_name,
+        birthDate: record.birth_date,
         parentName: record.parent_name,
         parentPhone: record.parent_phone,
       });
