@@ -181,6 +181,7 @@ async function insertIntoSupabase(table, rows, options = {}) {
       club_students: new Set(['id', 'club_id', 'branch_id', 'full_name', 'birth_date', 'parent_name', 'parent_phone', 'started_at', 'status', 'branch_ids', 'branch_status', 'attendance', 'created_at']),
       club_applications: new Set(['id', 'club_id', 'student_name', 'student_surname', 'birth_date', 'parent_name', 'parent_phone', 'branch_id', 'status', 'notes', 'files', 'created_at']),
       club_messages: new Set(['id', 'club_id', 'sender_name', 'sender_role', 'student_id', 'student_name', 'message', 'read', 'created_at']),
+      club_notifications: new Set(['id', 'club_id', 'user_id', 'type', 'text', 'created_at']),
     };
 
     const allowedKeys = allowedKeysByTable[table] ?? null;
@@ -319,6 +320,20 @@ function normalizeCoachIdList(value) {
   return value.filter((item) => item !== null && item !== undefined && item !== '');
 }
 
+function dedupeById(items, getIdentity = (item) => item?.id ?? item?.username ?? item?.name ?? '') {
+  if (!Array.isArray(items)) return [];
+
+  return items.filter((item, index, self) => {
+    const identity = String(getIdentity(item) ?? '').trim();
+    if (!identity) return true;
+    return index === self.findIndex((candidate) => String(getIdentity(candidate) ?? '').trim() === identity);
+  });
+}
+
+function safeCoachIdList(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 function normalizeStudentRecord(student) {
   if (!student || typeof student !== 'object') return null;
 
@@ -425,7 +440,7 @@ async function fetchAllClubsFromSupabase() {
       name: branch.name,
       fee: Number(branch.monthly_fee ?? 0),
       monthlyFee: Number(branch.monthly_fee ?? 0),
-      coachIds: normalizeCoachIdList(Array.isArray(branch.coach_ids) ? branch.coach_ids : (branch.coachIds ?? [])),
+      coachIds: normalizeCoachIdList(safeCoachIdList(branch.coach_ids ?? branch.coachIds ?? [])),
       clubId: branch.club_id,
       ...branch,
     });
@@ -483,7 +498,7 @@ async function fetchAllClubsFromSupabase() {
           ...branch,
           fee: Number(branch.fee ?? branch.monthly_fee ?? 0),
           monthlyFee: Number(branch.monthlyFee ?? branch.monthly_fee ?? branch.fee ?? 0),
-          coachIds: Array.isArray(branch.coachIds) ? branch.coachIds : [],
+          coachIds: safeCoachIdList(branch.coachIds),
         })),
         students: studentsByClubId[club.id] ?? [],
         coaches: coachesByClubId[club.id] ?? [],
@@ -1987,6 +2002,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
         password: coachForm.password,
         phone: coachForm.phone,
         isActive: true,
+        branchId: validBranchId,
+        branchName: branchName,
       });
 
       if (!profileInsertResult.ok) {
@@ -2132,14 +2149,20 @@ function AppClean({ initialPublicClubId = null } = {}) {
     }
 
     const appId = String(application.id ?? '');
+    const rawParentPassword = String(application.parentPassword ?? '').trim();
+    if (!rawParentPassword) {
+      alert('Veli şifresi boş olamaz. Lütfen kayıt sırasında girilen şifreyi kullanın.');
+      return;
+    }
+
     const parentCredentials = ensureParentCredentials({
       parentName: application.parentName,
       parentPhone: application.parentPhone,
-      parentPassword: application.parentPassword,
+      parentPassword: rawParentPassword,
       username: application.username,
     });
-    const parentUsername = parentCredentials.username;
-    const parentPassword = parentCredentials.password;
+    const parentUsername = String(parentCredentials.username || application.username || '').trim() || `VELI-${Date.now()}`;
+    const parentPassword = rawParentPassword;
     const normalizedPhone = normalizeWhatsappNumber(application.parentPhone);
 
     const insertStudentPayload = {
@@ -3908,7 +3931,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ?? clubs[0]
       ?? null;
 
-    const coachListForClub = users.filter((user) => user.role === 'coach' && user.clubId === coachClub?.id);
+    const coachListForClub = dedupeById(users.filter((user) => user.role === 'coach' && user.clubId === coachClub?.id), (user) => user.id || user.username || user.name);
     const currentCoachMatch = currentUser?.role === 'coach' && currentUser.clubId === coachClub?.id
       ? coachListForClub.find((user) => (
           user.id === currentUser.id
@@ -4008,7 +4031,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   const nextClubId = event.target.value;
                   setCoachViewClubId(nextClubId);
                   setSelectedCoachId('');
-                  setCoachViewCoachId('');
                 }}
               >
                 <option value="">Kulüp Seç</option>
@@ -4026,7 +4048,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 onChange={(event) => {
                   const nextCoachId = event.target.value;
                   setSelectedCoachId(nextCoachId);
-                  setCoachViewCoachId(nextCoachId);
+                  if (nextCoachId) {
+                    setCoachViewClubId(effectiveCoachClubId);
+                  }
                 }}
                 disabled={!effectiveCoachClubId || coachListForClub.length === 0}
               >
@@ -4235,10 +4259,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ? parentFilterBranchId
       : (branchOptions[0]?.id ?? '');
 
-    const branchStudents = (activeParentClub?.students ?? []).filter((student) => {
+    const branchStudents = dedupeById((activeParentClub?.students ?? []).filter((student) => {
       if (!effectiveBranchId) return true;
       return studentMatchesBranch(student, effectiveBranchId);
-    });
+    }), (student) => student.id || `${student.name || student.full_name || ''}|${student.parentPhone || student.parent_phone || ''}`);
 
     const selectedStudent = branchStudents.find((student) => student.id === parentFilterStudentId)
       ?? branchStudents.find((student) => student.id === currentUser?.childStudentId)
@@ -4943,7 +4967,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return insertIntoSupabase('clubs', [record]);
   };
 
-  const persistProfileToSupabase = async ({ clubId, role, fullName, username, password, phone, isActive = true }) => {
+  const persistProfileToSupabase = async ({ clubId, role, fullName, username, password, phone, isActive = true, branchId = null, branchName = null }) => {
     const resolvedClubId = normalizeDbClubId(clubId) || normalizeDbClubId(resolveClubId(clubId || currentUser?.clubId || selectedClubId || clubs[0]?.id || '')) || normalizeDbClubId(currentUser?.clubId) || normalizeDbClubId(clubs[0]?.id);
     const safeClubId = resolvedClubId;
     const safeRole = String(role || 'parent').trim();
@@ -4951,7 +4975,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const generatedUsername = buildGeneratedUsernameFromName(username, fullName) || null;
     const safeUsername = String(generatedUsername || '').trim() || null;
     const safePassword = String(password || '').trim() || null;
-    const allowedProfileKeys = ['id', 'club_id', 'auth_user_id', 'role', 'full_name', 'username', 'password', 'email', 'phone', 'is_active', 'created_at'];
+    const safeBranchId = normalizeDbBranchId(branchId);
+    const safeBranchName = String(branchName || '').trim() || null;
+    const allowedProfileKeys = ['id', 'club_id', 'auth_user_id', 'role', 'full_name', 'username', 'password', 'email', 'phone', 'branch_id', 'branch_name', 'is_active', 'created_at'];
     const record = Object.fromEntries(
       Object.entries({
         id: undefined,
@@ -4963,6 +4989,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
         password: safePassword,
         email: null,
         phone: String(phone || '').trim() || null,
+        branch_id: safeBranchId,
+        branch_name: safeBranchName,
         is_active: Boolean(isActive),
         created_at: new Date().toISOString(),
       }).filter(([, value]) => value !== undefined)
@@ -5489,7 +5517,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
               return;
             }
 
-            if (!String(applicationForm.parentPassword ?? '').trim()) {
+            const rawParentPassword = String(applicationForm.parentPassword ?? '').trim();
+            if (!rawParentPassword) {
               alert('Lütfen veli şifresini giriniz. Boş şifre ile kayıt oluşturulamaz.');
               return;
             }
@@ -5498,11 +5527,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
             const parentCredentials = buildParentCredentials({
               parentName: applicationForm.parentName,
               parentPhone: applicationForm.parentPhone,
-              parentPassword: applicationForm.parentPassword,
+              parentPassword: rawParentPassword,
               username: generatedUsername,
             });
-            const parentPassword = parentCredentials.password;
-            const finalUsername = parentCredentials.username;
+            const parentPassword = rawParentPassword;
+            const finalUsername = String(parentCredentials.username || generatedUsername || '').trim() || `VELI-${Date.now()}`;
             const payload = {
               studentName: studentNameParts.studentName,
               studentSurname: studentNameParts.studentSurname,
