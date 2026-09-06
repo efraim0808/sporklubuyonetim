@@ -4,19 +4,22 @@
 
 BEGIN;
 
--- 1) Remove application records first to avoid FK conflicts.
+-- 1) Remove notification records first so they do not block other deletions.
+DELETE FROM public.club_notifications;
+
+-- 2) Remove application records next to avoid FK conflicts.
 DELETE FROM public.club_applications;
 
--- 2) Remove student data.
+-- 3) Remove student data.
 DELETE FROM public.club_students;
 
--- 3) Remove coach records.
+-- 4) Remove coach records.
 DELETE FROM public.club_coaches;
 
--- 4) Remove branch data.
+-- 5) Remove branch data.
 DELETE FROM public.club_branches;
 
--- 5) Remove clubs last.
+-- 6) Remove clubs last.
 DELETE FROM public.clubs;
 
 -- 6) Keep the super-admin profile intact; do not delete or modify it.

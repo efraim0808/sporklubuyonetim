@@ -181,7 +181,7 @@ async function insertIntoSupabase(table, rows, options = {}) {
       club_students: new Set(['id', 'club_id', 'branch_id', 'full_name', 'birth_date', 'parent_name', 'parent_phone', 'started_at', 'status', 'branch_ids', 'branch_status', 'attendance', 'created_at']),
       club_applications: new Set(['id', 'club_id', 'student_name', 'student_surname', 'birth_date', 'parent_name', 'parent_phone', 'branch_id', 'status', 'notes', 'files', 'password', 'created_at']),
       club_messages: new Set(['id', 'club_id', 'sender_name', 'sender_role', 'student_id', 'student_name', 'message', 'read', 'created_at']),
-      club_notifications: new Set(['id', 'club_id', 'user_id', 'type', 'text', 'created_at']),
+      club_notifications: new Set(['id', 'club_id', 'user_id', 'type', 'text', 'student_id', 'student_name', 'parent_phone', 'created_at']),
     };
 
     const allowedKeys = allowedKeysByTable[table] ?? null;
@@ -326,6 +326,24 @@ function normalizeMessageRecord(message) {
   };
 }
 
+function normalizeNotificationRecord(notification) {
+  if (!notification || typeof notification !== 'object') return null;
+
+  return {
+    ...notification,
+    id: notification.id,
+    clubId: notification.club_id ?? notification.clubId ?? '',
+    userId: notification.user_id ?? notification.userId ?? null,
+    type: notification.type ?? 'notification',
+    text: notification.text ?? '',
+    studentId: notification.student_id ?? notification.studentId ?? null,
+    studentName: notification.student_name ?? notification.studentName ?? '',
+    parentPhone: notification.parent_phone ?? notification.parentPhone ?? '',
+    createdAt: notification.created_at ?? notification.createdAt ?? new Date().toISOString(),
+    read: Boolean(notification.read ?? false),
+  };
+}
+
 function normalizeCoachIdList(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => item !== null && item !== undefined && item !== '');
@@ -404,7 +422,7 @@ async function fetchAllClubsFromSupabase() {
 
   const clubIds = (clubsData ?? []).map((club) => club.id).filter(Boolean);
 
-  const [{ data: branchRows, error: branchError }, { data: applicationRows, error: applicationError }, { data: messageRows, error: messageError }, { data: studentRows, error: studentError }, { data: coachRows, error: coachError }] = await Promise.all([
+  const [{ data: branchRows, error: branchError }, { data: applicationRows, error: applicationError }, { data: messageRows, error: messageError }, { data: notificationRows, error: notificationError }, { data: studentRows, error: studentError }, { data: coachRows, error: coachError }] = await Promise.all([
     clubIds.length
       ? supabase.from('club_branches').select('*').in('club_id', clubIds)
       : Promise.resolve({ data: [], error: null }),
@@ -413,6 +431,9 @@ async function fetchAllClubsFromSupabase() {
       : Promise.resolve({ data: [], error: null }),
     clubIds.length
       ? supabase.from('club_messages').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    clubIds.length
+      ? supabase.from('club_notifications').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
       : Promise.resolve({ data: [], error: null }),
     clubIds.length
       ? supabase.from('club_students').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
@@ -432,6 +453,10 @@ async function fetchAllClubsFromSupabase() {
 
   if (messageError) {
     console.error('Supabase club_messages fetch failed:', messageError);
+  }
+
+  if (notificationError) {
+    console.error('Supabase club_notifications fetch failed:', notificationError);
   }
 
   if (studentError) {
@@ -499,6 +524,16 @@ async function fetchAllClubsFromSupabase() {
     messagesByClubId[message.club_id] = nextList;
   });
 
+  const notificationsByClubId = {};
+  (notificationRows ?? []).forEach((notification) => {
+    if (!notification?.club_id) return;
+    const normalized = normalizeNotificationRecord(notification);
+    if (!normalized) return;
+    const nextList = notificationsByClubId[notification.club_id] ?? [];
+    nextList.push(normalized);
+    notificationsByClubId[notification.club_id] = nextList;
+  });
+
   return (clubsData ?? [])
     .map((club) => {
       const normalized = normalizeClubRecord(club);
@@ -515,6 +550,7 @@ async function fetchAllClubsFromSupabase() {
         coaches: coachesByClubId[club.id] ?? [],
         pendingApplications: applicationsByClubId[club.id] ?? [],
         incomingMessages: messagesByClubId[club.id] ?? [],
+        notifications: notificationsByClubId[club.id] ?? [],
       };
     })
     .filter(Boolean);
@@ -956,6 +992,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [announcementForm, setAnnouncementForm] = useState({ target: 'Tüm Okula', title: 'Antrenman İptali', message: '' });
   const [applicationForm, setApplicationForm] = useState(defaultForm);
   const [showKvkkModal, setShowKvkkModal] = useState(false);
+  const [whatsappEditState, setWhatsappEditState] = useState({ open: false, phone: '', text: '', studentName: '' });
   const [profilePassword, setProfilePassword] = useState({ newPassword: '', confirmPassword: '' });
   const [showCoachPassword, setShowCoachPassword] = useState(false);
   const [showParentPassword, setShowParentPassword] = useState(false);
@@ -2699,30 +2736,53 @@ function AppClean({ initialPublicClubId = null } = {}) {
     setToastMessage('Duyuru uygulama içi bildirim olarak kaydedildi.');
   };
 
-  const sendPaymentReminderNotification = (student, amount, branchName) => {
+  const sendPaymentReminderNotification = async (student, amount, branchName) => {
     if (!student || !student.id) return;
 
     const clubName = currentClub?.name || 'Kulübümüz';
     const text = buildPaymentReminderNotificationText(student.name, amount, branchName, clubName);
+    const clubId = normalizeDbClubId(selectedClubId || currentClub?.id || currentUser?.clubId || '');
+
+    if (!clubId) {
+      alert('Kulüp kimliği bulunamadı. Bildirim kaydedilemedi.');
+      return;
+    }
+
+    const payload = {
+      club_id: clubId,
+      user_id: currentUser?.id ?? null,
+      type: 'payment-reminder',
+      text,
+      student_id: student.id,
+      student_name: student.name,
+      parent_phone: student.parentPhone || '',
+      created_at: new Date().toISOString(),
+    };
+
+    const { ok, error } = await insertIntoSupabase('club_notifications', [payload]);
+    if (!ok) {
+      console.error('Supabase payment reminder notification insert failed:', error);
+      alert('Aidat hatırlatma bildirimi veritabanına kaydedilemedi.');
+      return;
+    }
+
+    const localNotification = {
+      id: `notif-${Date.now()}`,
+      type: 'payment-reminder',
+      studentId: student.id,
+      studentName: student.name,
+      parentPhone: student.parentPhone || '',
+      text,
+      createdAt: new Date().toISOString(),
+      read: false,
+    };
 
     setClubs((prev) =>
       prev.map((club) =>
-        club.id === selectedClubId
+        club.id === selectedClubId || club.id === currentClub?.id
           ? {
               ...club,
-              notifications: [
-                {
-                  id: `notif-${Date.now()}`,
-                  type: 'payment-reminder',
-                  studentId: student.id,
-                  studentName: student.name,
-                  parentPhone: student.parentPhone || '',
-                  text,
-                  createdAt: new Date().toISOString(),
-                  read: false,
-                },
-                ...(club.notifications || []),
-              ],
+              notifications: [localNotification, ...(club.notifications || [])],
             }
           : club
       )
@@ -3797,7 +3857,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                                 {statusText}
                               </span>
                               {!isPaid && (
-                                <div className="flex flex-col gap-2 sm:flex-row">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                   <button
                                     className="secondary-btn"
                                     onClick={() =>
@@ -3808,6 +3868,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
                                     }
                                   >
                                     WhatsApp Hatırlat
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600 bg-slate-900/70 text-base text-violet-200 transition hover:border-violet-400 hover:text-white"
+                                    title="Mesajı Düzenle"
+                                    aria-label="WhatsApp mesajını düzenle"
+                                    onClick={() => openWhatsAppMessageEditor(student, paymentRow.amount, paymentRow.branchName)}
+                                  >
+                                    ✎
                                   </button>
                                   <button
                                     className="secondary-btn"
@@ -4325,11 +4394,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const targetStudent = selectedStudent || currentClub?.students.find((student) => student.id === currentUser?.childStudentId) || currentClub?.students[0] || null;
     const parentNotifications = (activeParentClub?.notifications || []).filter((notification) => {
       const notificationType = String(notification?.type || '').trim().toLowerCase();
-      if (notificationType.includes('payment')) return false;
-
       const studentMatches = !notification.studentId || notification.studentId === targetStudent?.id;
       const phoneMatches = !notification.parentPhone || !targetStudent?.parentPhone || normalizeWhatsappNumber(notification.parentPhone) === normalizeWhatsappNumber(targetStudent.parentPhone);
-      return studentMatches && phoneMatches;
+      return (notificationType.includes('payment') || notificationType.includes('announcement') || notificationType.includes('duyuru') || notificationType.includes('notice')) && studentMatches && phoneMatches;
     });
 
     const attendanceEntries = targetStudent?.attendance ?? [];
@@ -5032,6 +5099,29 @@ function AppClean({ initialPublicClubId = null } = {}) {
       </div>
     </div>
   );
+
+  const openWhatsAppMessageEditor = (student, paymentAmount, branchName) => {
+    const phoneNumber = student?.parentPhone || currentClub?.whatsappNumber || '';
+    const messageText = buildPaymentReminderWhatsAppMessage(student?.name || 'Öğrenci', paymentAmount, currentClub?.name || 'Kulübümüz');
+
+    setWhatsappEditState({
+      open: true,
+      phone: phoneNumber,
+      studentName: student?.name || 'Öğrenci',
+      text: messageText,
+    });
+  };
+
+  const sendEditedWhatsAppMessage = () => {
+    const phone = normalizeWhatsappNumber(whatsappEditState.phone || '');
+    if (!phone) {
+      alert('Velinin WhatsApp numarası tanımlı değil.');
+      return;
+    }
+
+    window.open(buildWhatsAppLink(phone, whatsappEditState.text || ''), '_blank', 'noopener,noreferrer');
+    setWhatsappEditState((prev) => ({ ...prev, open: false }));
+  };
 
   const persistClubToSupabase = async (club) => {
     const record = {
@@ -5784,6 +5874,37 @@ function AppClean({ initialPublicClubId = null } = {}) {
       {showAttendanceSummaryModal && renderAttendanceSummaryModal()}
       {showStudentDetailModal && renderStudentDetailModal()}
       {showKvkkModal && renderKvkkModal()}
+      {whatsappEditState.open && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+          <div className="card-surface w-full max-w-xl overflow-hidden rounded-[28px] border border-slate-700">
+            <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+              <h3 className="text-xl font-bold text-white">WhatsApp Mesajı Düzenle</h3>
+              <button className="text-xl text-slate-300 hover:text-white" onClick={() => setWhatsappEditState((prev) => ({ ...prev, open: false }))}>×</button>
+            </div>
+
+            <div className="space-y-4 px-5 py-5">
+              <div className="rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-sm text-slate-300">
+                <div className="mb-2 text-xs uppercase tracking-[0.2em] text-violet-300">Alıcı</div>
+                <div className="text-white">{whatsappEditState.studentName || 'Öğrenci'}</div>
+              </div>
+
+              <label className="block text-sm text-slate-300">
+                <span className="mb-2 block">Mesaj Metni</span>
+                <textarea
+                  className="input-shell min-h-[160px] w-full resize-none"
+                  value={whatsappEditState.text}
+                  onChange={(e) => setWhatsappEditState((prev) => ({ ...prev, text: e.target.value }))}
+                />
+              </label>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button className="secondary-btn" onClick={() => setWhatsappEditState((prev) => ({ ...prev, open: false }))}>İptal</button>
+                <button className="primary-btn" onClick={sendEditedWhatsAppMessage}>WhatsApp'ta Gönder</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {toastMessage && (
         <div className="fixed right-5 top-5 z-[60] rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-3 text-sm font-medium text-emerald-200 shadow-lg shadow-emerald-500/20">
           {toastMessage}

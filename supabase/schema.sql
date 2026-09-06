@@ -113,11 +113,23 @@ CREATE TABLE IF NOT EXISTS club_notifications (
   user_id UUID,
   type TEXT NOT NULL DEFAULT 'notification',
   text TEXT NOT NULL,
+  student_id UUID REFERENCES club_students(id) ON DELETE SET NULL,
+  student_name TEXT,
+  parent_phone TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE public.club_notifications
   ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'notification';
+
+ALTER TABLE public.club_notifications
+  ADD COLUMN IF NOT EXISTS student_id UUID REFERENCES club_students(id) ON DELETE SET NULL;
+
+ALTER TABLE public.club_notifications
+  ADD COLUMN IF NOT EXISTS student_name TEXT;
+
+ALTER TABLE public.club_notifications
+  ADD COLUMN IF NOT EXISTS parent_phone TEXT;
 
 CREATE TABLE IF NOT EXISTS club_messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
