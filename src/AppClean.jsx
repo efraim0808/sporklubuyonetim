@@ -812,6 +812,56 @@ function formatShortDate(dateString) {
   return parsed.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
+function addMonthsToDate(dateValue, monthCount) {
+  const parsed = new Date(String(dateValue || '').slice(0, 10));
+  if (Number.isNaN(parsed.getTime())) return null;
+  const next = new Date(parsed);
+  next.setMonth(next.getMonth() + monthCount);
+  return next;
+}
+
+function computeDueDateFromStartedAt(startedAt) {
+  const normalizedStartedAt = normalizeBirthDateValue(startedAt);
+  if (!normalizedStartedAt) return null;
+  const dueDate = addMonthsToDate(normalizedStartedAt, 1);
+  if (!dueDate) return null;
+  return dueDate.toISOString().slice(0, 10);
+}
+
+function normalizePaymentStatus(rawStatus, dueDate) {
+  const explicitStatus = String(rawStatus ?? '').trim();
+  if (explicitStatus === 'Ödendi') return 'Ödendi';
+  if (explicitStatus === 'Bekliyor') return 'Bekliyor';
+  if (explicitStatus === 'Gecikti') return 'Gecikti';
+
+  if (!dueDate) return 'Bekliyor';
+
+  const today = new Date();
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dueOnly = new Date(`${dueDate}T00:00:00`);
+
+  if (todayOnly > dueOnly) return 'Gecikti';
+  return 'Bekliyor';
+}
+
+function buildNextMonthPaymentRecord({ studentId, branchId, dueDate, amount }) {
+  const baseDueDate = new Date(`${String(dueDate || '').slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(baseDueDate.getTime())) return null;
+
+  const nextDueDate = new Date(baseDueDate.getFullYear(), baseDueDate.getMonth() + 1, baseDueDate.getDate());
+  const nextAmount = Number(amount ?? 0);
+
+  return {
+    id: `pay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    studentId,
+    branchId,
+    month: nextDueDate.toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase()),
+    amount: nextAmount,
+    status: normalizePaymentStatus('Bekliyor', nextDueDate.toISOString().slice(0, 10)),
+    dueDate: nextDueDate.toISOString().slice(0, 10),
+  };
+}
+
 function buildPaymentReminderWhatsAppMessage(studentName, amount, clubName) {
   return `Merhaba, ${clubName} kulübü olarak ${studentName} öğrencisinin ödemesi için hatırlatma yapıyoruz. Gecikmiş tutar: ${Number(amount || 0).toLocaleString('tr-TR')} ₺. Lütfen ödeme işlemini tamamlayalım.`;
 }
@@ -833,8 +883,8 @@ function getStudentPaymentRows(club, student) {
     );
 
     const amount = Number(existingPayment?.amount ?? branch?.monthlyFee ?? branch?.fee ?? 0);
-    const dueDate = existingPayment?.dueDate || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5).toISOString().slice(0, 10);
-    const status = existingPayment?.status || 'Ödenmedi';
+    const dueDate = existingPayment?.dueDate || computeDueDateFromStartedAt(student.startedAt ?? student.started_at) || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5).toISOString().slice(0, 10);
+    const status = normalizePaymentStatus(existingPayment?.status, dueDate);
 
     return {
       studentId: student.id,
@@ -2153,6 +2203,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const parentUsername = String(parentCredentials.username || application.username || '').trim() || `VELI-${Date.now()}`;
     const parentPassword = rawParentPassword;
     const normalizedPhone = normalizeWhatsappNumber(application.parentPhone);
+    const selectedStartedAt = application.startedAt || new Date().toISOString().slice(0, 10);
+    const firstDueDate = computeDueDateFromStartedAt(selectedStartedAt) || new Date(new Date(selectedStartedAt).getFullYear(), new Date(selectedStartedAt).getMonth() + 1, 5).toISOString().slice(0, 10);
 
     const insertStudentPayload = {
       clubId: resolvedClubId,
@@ -2161,7 +2213,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       parentPhone: application.parentPhone,
       branchId: application.branchId,
       birthDate: application.birthDate || '',
-      startedAt: new Date().toISOString().slice(0, 10),
+      startedAt: selectedStartedAt,
       status: 'active',
       skipDuplicateCheck: true,
     };
@@ -2245,7 +2297,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const selectedBranch = club.branches.find((branch) => branch.id === application.branchId);
     const branchFee = Number(selectedBranch?.monthlyFee ?? selectedBranch?.fee ?? 0);
     const monthLabel = new Date().toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase());
-    const dueDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5);
+    const dueDate = new Date(new Date(selectedStartedAt).getFullYear(), new Date(selectedStartedAt).getMonth() + 1, 5);
 
     const newStudent = {
       id: generatedStudentId,
@@ -2255,6 +2307,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       branchId: application.branchId,
       branchIds: [application.branchId],
       status: 'active',
+      startedAt: selectedStartedAt,
       branchStatus: { [application.branchId]: 'active' },
       attendance: [],
     };
@@ -2277,9 +2330,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
               studentId: generatedStudentId,
               month: monthLabel,
               amount: branchFee,
-              status: 'Ödenmedi',
+              status: normalizePaymentStatus('Bekliyor', firstDueDate),
               branchId: application.branchId,
-              dueDate: dueDate.toISOString().slice(0, 10),
+              dueDate: firstDueDate,
             },
           ],
           approvedApplications: [
@@ -2526,38 +2579,62 @@ function AppClean({ initialPublicClubId = null } = {}) {
           (payment) => payment.studentId === studentId && payment.branchId === branchId
         );
 
-        if (existingPayment) {
+        const student = (club.students || []).find((item) => item.id === studentId);
+        const branch = club.branches?.find((item) => item.id === branchId);
+        const baseDueDate = existingPayment?.dueDate || computeDueDateFromStartedAt(student?.startedAt ?? student?.started_at) || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5).toISOString().slice(0, 10);
+        const baseAmount = Number(existingPayment?.amount ?? branch?.monthlyFee ?? branch?.fee ?? 0);
+
+        const updatedPayments = (club.payments || []).map((payment) =>
+          payment.id === existingPayment?.id ? { ...payment, status: nextStatus, dueDate: baseDueDate, amount: baseAmount } : payment
+        );
+
+        let nextPayments = updatedPayments;
+
+        if (nextStatus === 'Ödendi') {
+          const nextPayment = buildNextMonthPaymentRecord({
+            studentId,
+            branchId,
+            dueDate: baseDueDate,
+            amount: baseAmount,
+          });
+
+          const alreadyHasNextPayment = (nextPayments || []).some(
+            (payment) => payment.studentId === studentId && payment.branchId === branchId && payment.dueDate === nextPayment?.dueDate
+          );
+
+          if (nextPayment && !alreadyHasNextPayment) {
+            nextPayments = [...nextPayments, nextPayment];
+          }
+        }
+
+        if (!existingPayment) {
+          const monthLabel = new Date().toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase());
+
           return {
             ...club,
-            payments: (club.payments || []).map((payment) =>
-              payment.id === existingPayment.id ? { ...payment, status: nextStatus } : payment
-            ),
+            payments: [
+              ...nextPayments,
+              {
+                id: `pay-${Date.now()}`,
+                studentId,
+                branchId,
+                month: monthLabel,
+                amount: Number(branch?.monthlyFee ?? branch?.fee ?? 0),
+                status: nextStatus,
+                dueDate: baseDueDate,
+              },
+            ],
           };
         }
 
-        const branch = club.branches?.find((item) => item.id === branchId);
-        const monthLabel = new Date().toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase());
-        const dueDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5).toISOString().slice(0, 10);
-
         return {
           ...club,
-          payments: [
-            ...(club.payments || []),
-            {
-              id: `pay-${Date.now()}`,
-              studentId,
-              branchId,
-              month: monthLabel,
-              amount: Number(branch?.monthlyFee ?? branch?.fee ?? 0),
-              status: nextStatus,
-              dueDate,
-            },
-          ],
+          payments: nextPayments,
         };
       })
     );
 
-    setToastMessage(nextStatus === 'Ödendi' ? 'Ödeme durumu ödendi olarak güncellendi.' : 'Ödeme durumu güncellendi.');
+    setToastMessage(nextStatus === 'Ödendi' ? 'Ödeme durumu ödendi olarak güncellendi. Bir sonraki ayın aidatı otomatik eklendi.' : 'Ödeme durumu güncellendi.');
   };
 
   const handleSendAnnouncement = async () => {
@@ -3695,7 +3772,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
                     return studentRows.map((paymentRow) => {
                       const isPaid = paymentRow.status === 'Ödendi';
-                      const statusText = isPaid ? 'Ödendi' : 'Gecikti / Ödenmedi';
+                      const statusText = isPaid ? 'Ödendi' : paymentRow.status === 'Gecikti' ? 'Gecikti' : 'Bekliyor';
 
                       return (
                         <tr key={`${student.id}-${paymentRow.branchId}`}>
@@ -3708,14 +3785,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
                               onChange={(e) => handlePaymentStatusChange(student.id, paymentRow.branchId, e.target.value)}
                             >
                               <option value="Ödendi">Ödendi</option>
-                              <option value="Ödenmedi">Gecikti / Ödenmedi</option>
+                              <option value="Bekliyor">Bekliyor</option>
+                              <option value="Gecikti">Gecikti</option>
                             </select>
                           </td>
                           <td className="px-3 py-3 text-white">{Number(paymentRow.amount || 0).toLocaleString('tr-TR')} ₺</td>
                           <td className="px-3 py-3">{formatShortDate(paymentRow.dueDate)}</td>
                           <td className="px-3 py-3">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                              <span className={`status-pill ${isPaid ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>
+                              <span className={`status-pill ${isPaid ? 'bg-emerald-500/15 text-emerald-300' : paymentRow.status === 'Gecikti' ? 'bg-red-500/15 text-red-300' : 'bg-amber-500/15 text-amber-300'}`}>
                                 {statusText}
                               </span>
                               {!isPaid && (
@@ -4761,25 +4839,57 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const nextParentPhone = normalizeWhatsappNumber(studentDetailForm.parentPhone);
     const nextBirthDate = studentDetailForm.birthDate || '';
     const nextStartedAt = studentDetailForm.startedAt || '';
+    const nextDueDate = computeDueDateFromStartedAt(nextStartedAt);
 
     setClubs((prev) =>
       prev.map((club) => {
         if (club.id !== selectedClubId) return club;
 
+        const updatedStudents = club.students.map((student) =>
+          student.id === studentDetailForm.studentId
+            ? {
+                ...student,
+                name: nextName || student.name,
+                parentName: nextParentName || student.parentName,
+                parentPhone: nextParentPhone || student.parentPhone,
+                birthDate: nextBirthDate || student.birthDate || student.birth_date || '',
+                startedAt: nextStartedAt || student.startedAt || '',
+              }
+            : student
+        );
+
+        const paymentForStudent = (club.payments || []).filter((payment) => payment.studentId === studentDetailForm.studentId);
+        const nextPayments = nextDueDate
+          ? (club.payments || []).map((payment) =>
+              payment.studentId === studentDetailForm.studentId
+                ? {
+                    ...payment,
+                    dueDate: nextDueDate,
+                    status: normalizePaymentStatus(payment.status, nextDueDate),
+                  }
+                : payment
+            )
+          : club.payments || [];
+
+        if (nextDueDate && !paymentForStudent.length) {
+          const targetStudent = updatedStudents.find((student) => student.id === studentDetailForm.studentId);
+          const branchId = targetStudent?.branchId || targetStudent?.branch_id || (targetStudent?.branchIds?.[0] ?? '');
+          const amount = Number(club.branches?.find((branch) => branch.id === branchId)?.monthlyFee ?? club.branches?.find((branch) => branch.id === branchId)?.fee ?? 0);
+          nextPayments.push({
+            id: `pay-${Date.now()}`,
+            studentId: studentDetailForm.studentId,
+            branchId,
+            month: new Date(nextDueDate).toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase()),
+            amount,
+            status: normalizePaymentStatus('Bekliyor', nextDueDate),
+            dueDate: nextDueDate,
+          });
+        }
+
         return {
           ...club,
-          students: club.students.map((student) =>
-            student.id === studentDetailForm.studentId
-              ? {
-                  ...student,
-                  name: nextName || student.name,
-                  parentName: nextParentName || student.parentName,
-                  parentPhone: nextParentPhone || student.parentPhone,
-                  birthDate: nextBirthDate || student.birthDate || student.birth_date || '',
-                  startedAt: nextStartedAt || student.startedAt || '',
-                }
-              : student
-          ),
+          students: updatedStudents,
+          payments: nextPayments,
         };
       })
     );
