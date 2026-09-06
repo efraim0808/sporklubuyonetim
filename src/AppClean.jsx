@@ -8,33 +8,17 @@ const initialUsers = [];
 const initialClubs = [];
 
 const LOCKED_SUPER_ADMIN_EMAIL = 'sagliksk@gmail.com';
-const LOCKED_SUPER_ADMIN_PASSWORD = 'Efraim+08';
 
 const lockedSuperAdminUser = {
   id: 'locked-super-admin',
   name: 'Süper Admin',
   email: LOCKED_SUPER_ADMIN_EMAIL,
   username: LOCKED_SUPER_ADMIN_EMAIL,
-  password: LOCKED_SUPER_ADMIN_PASSWORD,
+  password: '',
   role: 'super-admin',
   clubId: null,
   isActive: true,
 };
-
-function isLockedSuperAdminIdentity(inputEmail, inputPassword) {
-  const emailValue = String(inputEmail ?? '').trim().toLowerCase();
-  const passwordValue = String(inputPassword ?? '').trim();
-
-  return emailValue === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase() && passwordValue === LOCKED_SUPER_ADMIN_PASSWORD;
-}
-
-function isLockedSuperAdminUser(user) {
-  if (!user || typeof user !== 'object') return false;
-  const emailValue = String(user.email ?? user.username ?? '').trim().toLowerCase();
-  const passwordValue = String(user.password ?? '').trim();
-
-  return emailValue === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase() && passwordValue === LOCKED_SUPER_ADMIN_PASSWORD;
-}
 
 const defaultForm = {
   studentName: '',
@@ -1654,10 +1638,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const canonicalInputUsername = normalizeLoginUsername(cleanedUsername);
     const normalizedInputText = normalizeAuthText(cleanedUsername);
 
-    if (isLockedSuperAdminIdentity(cleanedUsername, enteredPassword)) {
-      return { ...lockedSuperAdminUser, role: 'super-admin', isActive: true };
-    }
-
     const directSupabaseMatch = users.find((user) => {
       const userRole = user.role;
       const isSuperAdminAccount = isSuperAdminRole(userRole) || isSuperAdminRole(role);
@@ -1681,10 +1661,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
     });
 
     if (directSupabaseMatch) return directSupabaseMatch;
-
-    if (cleanedUsername.toLowerCase() === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase() && enteredPassword === LOCKED_SUPER_ADMIN_PASSWORD) {
-      return { ...lockedSuperAdminUser, role: 'super-admin', isActive: true };
-    }
 
     return undefined;
   };
@@ -4750,6 +4726,67 @@ function AppClean({ initialPublicClubId = null } = {}) {
       if (nextClubId) setSelectedClubId(nextClubId);
       return mappedUser;
     };
+
+    const isSuperAdminEmailLogin = cleanedUsername.toLowerCase() === LOCKED_SUPER_ADMIN_EMAIL.toLowerCase() || cleanedUsername.includes('@');
+    if (isSuperAdminEmailLogin && supabase?.auth) {
+      try {
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+          email: cleanedUsername || LOCKED_SUPER_ADMIN_EMAIL,
+          password: enteredPassword,
+        });
+
+        if (!authError && authData?.user) {
+          const userEmail = String(authData.user.email || cleanedUsername || LOCKED_SUPER_ADMIN_EMAIL).trim().toLowerCase();
+          const { data: profileData, error: profileError } = await supabase
+            .from('profiles')
+            .select('*')
+            .or(`email.eq.${userEmail},auth_user_id.eq.${authData.user.id}`)
+            .limit(20);
+
+          const superAdminProfile = (profileData ?? []).find((row) => {
+            const roleName = String(row?.role ?? '').trim().toLowerCase();
+            return roleName === 'super-admin' || roleName === 'super_admin';
+          });
+
+          if (profileError) {
+            console.error('Super admin profile lookup failed:', profileError);
+            await supabase.auth.signOut();
+            alert('Süper admin yetkisi doğrulanamadı.');
+            return;
+          }
+
+          if (!superAdminProfile) {
+            await supabase.auth.signOut();
+            alert('Bu hesap süper admin rolüne sahip değil.');
+            return;
+          }
+
+          const mappedUser = {
+            id: superAdminProfile.id || authData.user.id,
+            name: superAdminProfile.full_name || 'Süper Admin',
+            username: superAdminProfile.username || userEmail,
+            password: '',
+            role: 'super-admin',
+            clubId: null,
+            branchId: null,
+            phone: superAdminProfile.phone || '',
+            email: userEmail,
+            isActive: superAdminProfile.is_active !== false,
+          };
+
+          setCurrentUser(mappedUser);
+          setActiveRole('super-admin');
+          setSelectedClubId(clubs[0]?.id ?? '');
+          return;
+        }
+
+        if (authError) {
+          console.warn('Supabase super-admin auth failed:', authError);
+        }
+      } catch (error) {
+        console.error('Super admin Supabase auth crashed:', error);
+      }
+    }
 
     if (supabase && supabase.from) {
       const { data: clubData, error: clubError } = await supabase.from('clubs').select('*');
