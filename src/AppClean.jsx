@@ -2008,53 +2008,20 @@ function AppClean({ initialPublicClubId = null } = {}) {
       isActive: true,
     };
 
-    let createdProfileId = null;
-
     console.group('Coach create flow');
 
     try {
-      console.log('Step 1: create coach profile in profiles table', {
+      console.log('Step 1: create coach record directly in club_coaches table', {
         clubId: safeClubId,
-        role: 'coach',
-        fullName: coachForm.name,
+        name: coachForm.name,
         username,
+        phone: coachForm.phone,
         branchId: validBranchId,
         branchName,
       });
 
-      const profileInsertResult = await persistProfileToSupabase({
-        id,
-        clubId: safeClubId,
-        role: 'coach',
-        fullName: coachForm.name,
-        username,
-        password: coachForm.password,
-        phone: coachForm.phone,
-        isActive: true,
-        branchId: validBranchId,
-        branchName: branchName,
-      });
-
-      if (!profileInsertResult.ok) {
-        throw new Error(profileInsertResult.error?.message || 'Antrenör profili oluşturulamadı.');
-      }
-
-      createdProfileId = profileInsertResult.data?.[0]?.id || profileInsertResult.data?.id || null;
-      if (!createdProfileId) {
-        throw new Error('Antrenör profili oluşturuldu fakat kayıt kimliği geri dönmedi.');
-      }
-
-      console.log('Step 2: create club_coaches row using saved profile metadata', {
-        profileId: createdProfileId,
-        clubId: safeClubId,
-        branchId: validBranchId,
-        username,
-        name: coachForm.name,
-      });
-
       const coachInsertResult = await persistCoachToSupabase({
-        id: createdProfileId,
-        profileId: createdProfileId,
+        id,
         clubId: safeClubId,
         name: coachForm.name,
         username,
@@ -2087,13 +2054,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
       alert('Antrenör kaydedildi.');
     } catch (error) {
       const errorMessage = error?.message || 'Antrenör kaydı oluşturulamadı.';
-
-      if (createdProfileId) {
-        const rollbackResult = await deleteFromSupabase('profiles', 'id', createdProfileId);
-        if (!rollbackResult.ok) {
-          console.warn('Coach profile rollback failed after coach insert error:', rollbackResult.error);
-        }
-      }
 
       console.error('Supabase coach create flow failed.', error);
       alert(errorMessage);
@@ -3492,13 +3452,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
                               if (error) throw error;
 
-                              await supabase
-                                .from('profiles')
-                                .update({ is_active: nextStatus })
-                                .eq('club_id', activeCoachClubId)
-                                .eq('role', 'coach')
-                                .eq('username', coach.username || coach.name);
-
                               setToastMessage(`Antrenör durumu ${nextStatus ? 'aktif' : 'pasif'} olarak güncellendi.`);
                             } catch (error) {
                               console.error('Coach status update failed:', error);
@@ -3526,15 +3479,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
                                 .eq('username', coach.username || coach.name);
 
                               if (coachDeleteError) throw coachDeleteError;
-
-                              const { error: profileDeleteError } = await supabase
-                                .from('profiles')
-                                .delete()
-                                .eq('club_id', activeCoachClubId)
-                                .eq('role', 'coach')
-                                .eq('username', coach.username || coach.name);
-
-                              if (profileDeleteError) throw profileDeleteError;
 
                               setUsers((prev) => prev.filter((user) => user.id !== coach.id));
                               setClubs((prev) => prev.map((club) => (
@@ -4686,31 +4630,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
         }
       }
 
-      const { data: profileData, error: profileError } = await supabase.from('profiles').select('*');
-      console.log('2. Profiles tablosu arama sonucu:', profileData, profileError);
-
-      if (!profileError && Array.isArray(profileData) && profileData.length > 0) {
-        const profileMatch = profileData.find((row) => {
-          const storedPassword = String(row.password ?? '').trim();
-          const matchesIdentity = matchesLoginIdentity(row, cleanedUsername);
-          return storedPassword === enteredPassword && matchesIdentity;
-        });
-
-        console.log('Profiles tablosunda eşleşen kullanıcı:', profileMatch);
-
-        if (profileMatch) {
-          const mappedUser = applyAuthenticatedUser({
-            ...profileMatch,
-            role: profileMatch.role || 'parent',
-            club_id: profileMatch.club_id || null,
-          }, profileMatch.role || 'parent');
-          console.log('Profiles tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
-          return;
-        }
-      }
-
       const { data: coachData, error: coachError } = await supabase.from('club_coaches').select('*');
-      console.log('3. Club_coaches tablosu arama sonucu:', coachData, coachError);
+      console.log('2. Club_coaches tablosu arama sonucu:', coachData, coachError);
 
       if (!coachError && Array.isArray(coachData) && coachData.length > 0) {
         const coachMatch = coachData.find((row) => {
@@ -4730,6 +4651,34 @@ function AppClean({ initialPublicClubId = null } = {}) {
             branch_id: coachMatch.branch_id || coachMatch.branchId || null,
           }, 'coach');
           console.log('club_coaches eşleşmesi ile giriş yapıldı:', mappedUser);
+          return;
+        }
+      }
+
+      const { data: profileData, error: profileError } = await supabase.from('profiles').select('*');
+      console.log('3. Profiles tablosu arama sonucu:', profileData, profileError);
+
+      if (!profileError && Array.isArray(profileData) && profileData.length > 0) {
+        const profileMatch = profileData.find((row) => {
+          const roleName = String(row?.role ?? '').trim().toLowerCase();
+          if (roleName === 'coach') {
+            return false;
+          }
+
+          const storedPassword = String(row.password ?? '').trim();
+          const matchesIdentity = matchesLoginIdentity(row, cleanedUsername);
+          return storedPassword === enteredPassword && matchesIdentity;
+        });
+
+        console.log('Profiles tablosunda eşleşen kullanıcı:', profileMatch);
+
+        if (profileMatch) {
+          const mappedUser = applyAuthenticatedUser({
+            ...profileMatch,
+            role: profileMatch.role || 'parent',
+            club_id: profileMatch.club_id || null,
+          }, profileMatch.role || 'parent');
+          console.log('Profiles tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
           return;
         }
       }
