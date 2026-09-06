@@ -4630,29 +4630,28 @@ function AppClean({ initialPublicClubId = null } = {}) {
         }
       }
 
-      const { data: coachData, error: coachError } = await supabase.from('club_coaches').select('*');
-      console.log('2. Club_coaches tablosu arama sonucu:', coachData, coachError);
+      const { data: coachData, error: coachError } = await supabase
+        .from('club_coaches')
+        .select('id, club_id, branch_id, name, username, password, phone, is_active')
+        .eq('username', cleanedUsername)
+        .eq('password', enteredPassword)
+        .limit(1);
+
+      console.log('2. Club_coaches doğrudan kullanıcı/şifre araması:', coachData, coachError);
 
       if (!coachError && Array.isArray(coachData) && coachData.length > 0) {
-        const coachMatch = coachData.find((row) => {
-          const storedPassword = String(row.password ?? '').trim();
-          const sameUsername = normalizeLoginUsername(String(row.username ?? '')) === normalizeLoginUsername(cleanedUsername);
-          const sameName = normalizeDuplicateText(String(row.name ?? '')) === normalizeDuplicateText(cleanedUsername);
-          return storedPassword === enteredPassword && (sameUsername || sameName || matchesLoginIdentity(row, cleanedUsername));
-        });
+        const coachMatch = coachData[0];
 
-        console.log('club_coaches tablosunda eşleşen antrenör:', coachMatch);
+        const mappedUser = applyAuthenticatedUser({
+          ...coachMatch,
+          role: 'coach',
+          club_id: coachMatch.club_id || coachMatch.clubId || null,
+          branch_id: coachMatch.branch_id || coachMatch.branchId || null,
+          is_active: coachMatch.is_active !== false,
+        }, 'coach');
 
-        if (coachMatch) {
-          const mappedUser = applyAuthenticatedUser({
-            ...coachMatch,
-            role: 'coach',
-            club_id: coachMatch.club_id || coachMatch.clubId || null,
-            branch_id: coachMatch.branch_id || coachMatch.branchId || null,
-          }, 'coach');
-          console.log('club_coaches eşleşmesi ile giriş yapıldı:', mappedUser);
-          return;
-        }
+        console.log('club_coaches eşleşmesi ile giriş yapıldı:', mappedUser);
+        return;
       }
 
       const { data: profileData, error: profileError } = await supabase.from('profiles').select('*');
