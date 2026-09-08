@@ -5093,9 +5093,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const activeParentClub = clubs.find((club) => club.id === resolvedParentClubId) ?? currentClub ?? availableClubOptions[0] ?? null;
     const branchOptions = activeParentClub?.branches ?? [];
-    const effectiveBranchId = parentFilterBranchId && branchOptions.some((branch) => branch.id === parentFilterBranchId)
-      ? parentFilterBranchId
-      : (branchOptions[0]?.id ?? '');
+    const effectiveBranchId = isPlainParentSession
+      ? (parentFilterBranchId && branchOptions.some((branch) => branch.id === parentFilterBranchId) ? parentFilterBranchId : '')
+      : (parentFilterBranchId && branchOptions.some((branch) => branch.id === parentFilterBranchId)
+        ? parentFilterBranchId
+        : (branchOptions[0]?.id ?? ''));
 
     const parentProfileIds = [
       currentUser?.parentId,
@@ -5152,6 +5154,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const effectiveParentStudents = dedupeById(
       (allParentClubStudents ?? []).filter((student) => {
+        if (isPlainParentSession && parentViewStudents.length) return true;
         if (!resolvedParentClubId) return true;
         const studentClubId = student?.clubId || clubs.find((club) => (club.students ?? []).some((item) => String(item.id) === String(student.id)))?.id || '';
         return !studentClubId || studentClubId === resolvedParentClubId;
