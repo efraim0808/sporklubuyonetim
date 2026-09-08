@@ -1182,6 +1182,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [showCoachPassword, setShowCoachPassword] = useState(false);
   const [showParentPassword, setShowParentPassword] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [loginFieldsLocked, setLoginFieldsLocked] = useState(true);
   const [subscriptionExtensionValues, setSubscriptionExtensionValues] = useState({});
   const [selectedStudentDetail, setSelectedStudentDetail] = useState(null);
   const [showStudentDetailModal, setShowStudentDetailModal] = useState(false);
@@ -1248,6 +1250,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     if (!currentUser) {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      clearLoginForm();
       return;
     }
 
@@ -1260,6 +1263,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
       })
     );
   }, [sessionHydrated, currentUser, activeRole, selectedClubId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    clearLoginForm();
+  }, []);
 
   const getClubById = (clubId) => {
     if (!clubId) return null;
@@ -2046,9 +2054,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const match = findMatchingUser(username, password, role);
 
     if (!match) {
+      clearLoginForm();
       alert('Giriş bilgileri hatalı.');
       return;
     }
+
+    clearLoginForm();
 
     const isSuperAdminLogin = isSuperAdminRole(match.role) || isSuperAdminRole(role);
     if (isSuperAdminLogin) {
@@ -2064,12 +2075,19 @@ function AppClean({ initialPublicClubId = null } = {}) {
     if (nextClubId) setSelectedClubId(nextClubId);
   };
 
+  const clearLoginForm = () => {
+    setLoginForm({ username: '', password: '' });
+    setLoginFieldsLocked(true);
+    setShowLoginPassword(false);
+  };
+
   const handleLogout = () => {
     setCurrentUser(null);
     setActiveRole('super-admin');
     setSelectedClubId('');
     setPublicFormClubId(null);
     setPublicClubDetails(null);
+    clearLoginForm();
     document.title = 'Spor Kulüpleri ve Okulları Yönetim Sistemi';
 
     if (typeof window !== 'undefined') {
@@ -5507,8 +5525,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const handleLogin = async () => {
-    const username = document.getElementById('login-input')?.value ?? '';
-    const password = document.getElementById('password-input')?.value ?? '';
+    const username = String(loginForm.username ?? '').trim();
+    const password = String(loginForm.password ?? '').trim();
     const cleanedUsername = String(username ?? '').trim();
     const enteredPassword = String(password ?? '').trim();
 
@@ -5789,16 +5807,36 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 <input
                   className="input-shell"
                   placeholder="Kullanıcı Adı"
-                  defaultValue=""
-                  id="login-input"
+                  value={loginForm.username}
+                  onChange={(event) => setLoginForm((prev) => ({ ...prev, username: event.target.value }))}
+                  onFocus={() => setLoginFieldsLocked(false)}
+                  readOnly={loginFieldsLocked}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1pignore="true"
+                  data-form-type="other"
+                  name="username"
                 />
                 <div className="relative">
                   <input
                     className="input-shell w-full pr-12"
                     type={showLoginPassword ? 'text' : 'password'}
                     placeholder="Şifre"
-                    defaultValue=""
-                    id="password-input"
+                    value={loginForm.password}
+                    onChange={(event) => setLoginForm((prev) => ({ ...prev, password: event.target.value }))}
+                    onFocus={() => setLoginFieldsLocked(false)}
+                    readOnly={loginFieldsLocked}
+                    autoComplete="new-password"
+                    autoCorrect="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    data-lpignore="true"
+                    data-1pignore="true"
+                    data-form-type="other"
+                    name="password"
                   />
                   <button
                     type="button"
