@@ -3102,8 +3102,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
         const totalCount = filteredEntries.length;
         const attendanceRate = totalCount ? Number(((presentCount / totalCount) * 100).toFixed(2)) : 0;
 
-        if (!filteredEntries.length) return;
-
         rows.push({
           Kulup: club.name || 'Kulüp',
           Branş: (club.branches ?? []).find((branch) => getStudentBranchIds(student).includes(branch.id))?.name || 'Branş Yok',
@@ -3122,8 +3120,26 @@ function AppClean({ initialPublicClubId = null } = {}) {
     });
 
     if (!rows.length) {
-      alert('Seçilen branş, ay ve yıl için öğrenci yoklama verisi bulunamadı.');
-      return;
+      const fallbackStudentRows = exportTargets.flatMap((club) => (club.students ?? []).filter((student) => !activeReportBranchId || studentMatchesBranch(student, activeReportBranchId)).map((student) => ({
+        Kulup: club.name || 'Kulüp',
+        Branş: (club.branches ?? []).find((branch) => getStudentBranchIds(student).includes(branch.id))?.name || 'Branş Yok',
+        Ogrenci: student.name || student.full_name || 'Öğrenci',
+        Veli: student.parentName || 'Belirtilmemiş',
+        Telefon: student.parentPhone || 'Yok',
+        ToplamDers: 0,
+        Katildi: 0,
+        Devamsiz: 0,
+        Izinli: 0,
+        KatilimYuzdesi: 0,
+        Ay: monthLabel,
+        Yil: yearLabel,
+      })));
+
+      if (!fallbackStudentRows.length) {
+        return;
+      }
+
+      rows.push(...fallbackStudentRows);
     }
 
     const workbook = XLSX.utils.book_new();
