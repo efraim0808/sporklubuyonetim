@@ -5129,18 +5129,21 @@ function AppClean({ initialPublicClubId = null } = {}) {
         {coachTab === 'profile' && (
           <div className="card-surface rounded-3xl p-6">
             <h3 className="mb-4 text-xl font-semibold text-white">Profil / Şifre Ayarları</h3>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-blue-400/30 bg-blue-500/5 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-blue-300">Tema</div>
+                  <div className="mt-1 text-sm font-medium text-white">Arayüz görünümünü seçin</div>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-blue-300/30 bg-slate-950/50 p-1">
+                  <button type="button" onClick={() => setThemeMode('dark')} className={`rounded-lg px-3 py-2 text-xs font-semibold ${themeMode === 'dark' ? 'bg-slate-800 text-white' : 'text-slate-300'}`}>Koyu</button>
+                  <button type="button" onClick={() => setThemeMode('light')} className={`rounded-lg px-3 py-2 text-xs font-semibold ${themeMode === 'light' ? 'bg-blue-600 text-white' : 'text-slate-300'}`}>Açık</button>
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
               <input className="input-shell" type="password" placeholder="Yeni Şifre" value={profilePassword.newPassword} onChange={(e) => setProfilePassword({ ...profilePassword, newPassword: e.target.value })} />
               <input className="input-shell" type="password" placeholder="Şifre Onayı" value={profilePassword.confirmPassword} onChange={(e) => setProfilePassword({ ...profilePassword, confirmPassword: e.target.value })} />
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <label className="space-y-2 text-sm text-slate-300">
-                <span className="block text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Tema</span>
-                <select className="input-shell" value={themeMode} onChange={(event) => setThemeMode(event.target.value)}>
-                  <option value="dark">Koyu</option>
-                  <option value="light">Açık</option>
-                </select>
-              </label>
             </div>
             <div className="mt-4 flex justify-end">
               <button className="primary-btn" onClick={handlePasswordUpdate}>Şifreyi Güncelle</button>
@@ -5612,18 +5615,21 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
             <div className="card-surface rounded-3xl p-6">
               <h3 className="mb-4 text-xl font-semibold text-white">Profil / Şifre Ayarları</h3>
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-2xl border border-blue-400/30 bg-blue-500/5 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[0.2em] text-blue-300">Tema</div>
+                    <div className="mt-1 text-sm font-medium text-white">Arayüz görünümünü seçin</div>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-blue-300/30 bg-slate-950/50 p-1">
+                    <button type="button" onClick={() => setThemeMode('dark')} className={`rounded-lg px-3 py-2 text-xs font-semibold ${themeMode === 'dark' ? 'bg-slate-800 text-white' : 'text-slate-300'}`}>Koyu</button>
+                    <button type="button" onClick={() => setThemeMode('light')} className={`rounded-lg px-3 py-2 text-xs font-semibold ${themeMode === 'light' ? 'bg-blue-600 text-white' : 'text-slate-300'}`}>Açık</button>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
                 <input className="input-shell" type="password" placeholder="Yeni Şifre" value={profilePassword.newPassword} onChange={(e) => setProfilePassword({ ...profilePassword, newPassword: e.target.value })} />
                 <input className="input-shell" type="password" placeholder="Şifre Onayı" value={profilePassword.confirmPassword} onChange={(e) => setProfilePassword({ ...profilePassword, confirmPassword: e.target.value })} />
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <label className="space-y-2 text-sm text-slate-300">
-                  <span className="block text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Tema</span>
-                  <select className="input-shell" value={themeMode} onChange={(event) => setThemeMode(event.target.value)}>
-                    <option value="dark">Koyu</option>
-                    <option value="light">Açık</option>
-                  </select>
-                </label>
               </div>
               <div className="mt-4 flex justify-end">
                 <button className="primary-btn" onClick={handlePasswordUpdate}>Şifreyi Güncelle</button>
@@ -7116,6 +7122,27 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   </select>
                 </label>
               )}
+
+              <div className={`flex items-center gap-2 rounded-2xl border px-3 py-2 ${themeMode === 'light' ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-700 bg-slate-950/70 text-slate-200'}`}>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.2em] opacity-80">Tema</span>
+                <div className={`flex items-center gap-1 rounded-xl p-1 ${themeMode === 'light' ? 'bg-blue-100' : 'bg-slate-900'}`}>
+                  <button
+                    type="button"
+                    onClick={() => setThemeMode('dark')}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${themeMode === 'dark' ? 'bg-slate-900 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    Koyu
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setThemeMode('light')}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${themeMode === 'light' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    Açık
+                  </button>
+                </div>
+              </div>
+
               <button className="secondary-btn" onClick={handleLogout}>Çıkış</button>
             </div>
           </header>
