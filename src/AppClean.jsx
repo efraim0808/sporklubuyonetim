@@ -1472,91 +1472,50 @@ function AppClean({ initialPublicClubId = null } = {}) {
       const clubId = currentUser.clubId ? normalizeDbClubId(currentUser.clubId) : null;
 
       try {
-        let profileQuery = supabase
-          .from('profiles')
-          .select('*')
-          .eq('role', 'parent');
-
-        if (currentUsername) {
-          profileQuery = profileQuery.eq('username', currentUsername);
-        }
-
-        if (currentFullName) {
-          profileQuery = profileQuery.or(`full_name.ilike.%${currentFullName}%,username.ilike.%${currentUsername || currentFullName}%`);
-        }
-
-        if (currentPhone) {
-          profileQuery = profileQuery.or(`phone.ilike.%${currentPhone}%,username.ilike.%${currentUsername || currentFullName}%`);
-        }
-
-        if (clubId) {
-          profileQuery = profileQuery.eq('club_id', clubId);
-        }
-
-        const { data: profileRows, error: profileError } = await profileQuery.limit(20);
-        if (profileError) {
-          console.warn('Parent profile exact fetch failed:', profileError);
-          if (!isCancelled) {
-            setParentViewProfile(null);
-            setParentViewStudents([]);
-          }
-          return;
-        }
-
-        const exactProfile = (profileRows ?? []).find((row) => {
-          const rowUsername = normalizeLoginUsername(String(row?.username ?? '').trim());
-          const rowFullName = normalizeDuplicateText(String(row?.full_name ?? row?.name ?? '').trim());
-          const rowPhone = normalizeWhatsappNumber(String(row?.phone ?? '').trim());
-          return (
-            (currentUsername && rowUsername && rowUsername === normalizeLoginUsername(currentUsername)) ||
-            (currentFullName && rowFullName && rowFullName === normalizeDuplicateText(currentFullName)) ||
-            (currentPhone && rowPhone && rowPhone === currentPhone)
-          );
-        }) ?? null;
+        const exactProfile = currentFullName
+          ? (await supabase
+              .from('profiles')
+              .select('*')
+              .eq('role', 'parent')
+              .eq('username', currentUsername || currentFullName)
+              .limit(20)).data ?? []
+          : [];
 
         if (!isCancelled) {
-          setParentViewProfile(exactProfile);
+          setParentViewProfile((exactProfile ?? []).find((row) => {
+            const rowUsername = normalizeLoginUsername(String(row?.username ?? '').trim());
+            const rowFullName = normalizeDuplicateText(String(row?.full_name ?? row?.name ?? '').trim());
+            const rowPhone = normalizeWhatsappNumber(String(row?.phone ?? '').trim());
+            return (
+              (currentUsername && rowUsername === normalizeLoginUsername(currentUsername)) ||
+              (currentFullName && rowFullName === normalizeDuplicateText(currentFullName)) ||
+              (currentPhone && rowPhone === currentPhone)
+            );
+          }) ?? null);
         }
 
-        const exactClubId = normalizeDbClubId(exactProfile?.club_id) || clubId || currentUser.clubId || '';
-        if (!exactClubId) {
+        const exactClubId = normalizeDbClubId((exactProfile[0]?.club_id) || clubId || currentUser.clubId || '');
+        if (!exactClubId || !currentFullName) {
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
-        let studentQuery = supabase
+        const { data: studentRows, error: studentError } = await supabase
           .from('club_students')
           .select('*')
-          .eq('club_id', exactClubId);
+          .eq('club_id', exactClubId)
+          .eq('parent_name', currentFullName)
+          .order('created_at', { ascending: false })
+          .limit(200);
 
-        if (currentFullName) {
-          studentQuery = studentQuery.or(`parent_name.ilike.%${currentFullName}%,parent_phone.ilike.%${currentPhone || ''}%`);
-        }
-
-        if (currentPhone) {
-          studentQuery = studentQuery.or(`parent_phone.ilike.%${currentPhone}%,parent_name.ilike.%${currentFullName || currentUsername || ''}%`);
-        }
-
-        const { data: studentRows, error: studentError } = await studentQuery.order('created_at', { ascending: false }).limit(200);
         if (studentError) {
           console.warn('Parent student exact fetch failed:', studentError);
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
-        const filteredStudentRows = (studentRows ?? []).filter((student) => {
-          const studentParentName = normalizeDuplicateText(String(student?.parent_name ?? student?.parentName ?? '').trim());
-          const studentParentPhone = normalizeWhatsappNumber(String(student?.parent_phone ?? student?.parentPhone ?? '').trim());
-          const currentNameNormalized = normalizeDuplicateText(currentFullName);
-          const currentUsernameNormalized = normalizeLoginUsername(currentUsername);
-          const rowMatchesName = Boolean(currentFullName && studentParentName && (studentParentName.includes(currentNameNormalized) || currentNameNormalized.includes(studentParentName) || studentParentName === currentNameNormalized));
-          const rowMatchesPhone = Boolean(currentPhone && studentParentPhone && studentParentPhone === currentPhone);
-          const rowMatchesUsername = Boolean(currentUsername && studentParentName && (normalizeLoginUsername(studentParentName) === currentUsernameNormalized || studentParentName.includes(currentUsernameNormalized) || currentUsernameNormalized.includes(studentParentName)));
-          return rowMatchesName || rowMatchesPhone || rowMatchesUsername;
-        });
-
         if (!isCancelled) {
-          setParentViewStudents(filteredStudentRows);
+          setParentViewStudents(studentRows ?? []);
         }
       } catch (error) {
         console.error('Parent exact fetch crashed:', error);
