@@ -1482,7 +1482,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
         }
 
         if (currentFullName) {
-          profileQuery = profileQuery.eq('full_name', currentFullName);
+          profileQuery = profileQuery.or(`full_name.eq.${currentFullName},username.eq.${currentUsername || currentFullName}`);
+        }
+
+        if (currentPhone) {
+          profileQuery = profileQuery.or(`phone.eq.${currentPhone},username.eq.${currentUsername || currentFullName}`);
         }
 
         if (clubId) {
@@ -1514,7 +1518,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
           setParentViewProfile(exactProfile);
         }
 
-        if (!exactProfile) {
+        const exactClubId = normalizeDbClubId(exactProfile?.club_id) || clubId || currentUser.clubId || '';
+        if (!exactClubId) {
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
@@ -1522,14 +1527,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
         let studentQuery = supabase
           .from('club_students')
           .select('*')
-          .eq('club_id', normalizeDbClubId(exactProfile.club_id) || clubId || currentUser.clubId || '');
+          .eq('club_id', exactClubId);
 
         if (currentFullName) {
-          studentQuery = studentQuery.eq('parent_name', currentFullName);
+          studentQuery = studentQuery.or(`parent_name.eq.${currentFullName},parent_phone.eq.${currentPhone || currentFullName}`);
         }
 
         if (currentPhone) {
-          studentQuery = studentQuery.eq('parent_phone', currentPhone);
+          studentQuery = studentQuery.or(`parent_phone.eq.${currentPhone},parent_name.eq.${currentFullName || currentUsername || ''}`);
         }
 
         const { data: studentRows, error: studentError } = await studentQuery.order('created_at', { ascending: false }).limit(200);
@@ -5235,6 +5240,25 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   <option value="">Veli / Öğrenci Seç</option>
                   {branchStudents.map((student, studentIndex) => (
                     <option key={`${student.id ?? 'student-option'}-${studentIndex}`} value={student.id}>{getStudentDisplayLabel(student)}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+
+          {!adminFilterEnabled && branchStudents.length > 1 && (
+            <div className="mt-5">
+              <label className="space-y-2 block">
+                <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Öğrenci Seç</span>
+                <select
+                  className="input-shell"
+                  value={selectedStudent?.id || ''}
+                  onChange={(event) => setParentFilterStudentId(event.target.value)}
+                  disabled={!branchStudents.length}
+                >
+                  <option value="">Öğrenci Seç</option>
+                  {branchStudents.map((student, studentIndex) => (
+                    <option key={`${student.id ?? 'parent-student-option'}-${studentIndex}`} value={student.id}>{getStudentDisplayLabel(student)}</option>
                   ))}
                 </select>
               </label>
