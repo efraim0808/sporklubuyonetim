@@ -5697,6 +5697,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
         isActive: userRecord.is_active !== false,
       };
 
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(SESSION_REMEMBER_KEY, 'true');
+        } catch (error) {
+          console.warn('Could not persist remember-me flag after login:', error);
+        }
+      }
+
       if (mappedUser.role === 'coach' && mappedUser.clubId && !mappedUser.branchId && supabase && supabase.from) {
         supabase
           .from('club_coaches')
@@ -5786,6 +5794,13 @@ function AppClean({ initialPublicClubId = null } = {}) {
           setCurrentUser(mappedUser);
           setActiveRole('super-admin');
           setSelectedClubId(clubs[0]?.id ?? '');
+          if (typeof window !== 'undefined') {
+            try {
+              window.localStorage.setItem(SESSION_REMEMBER_KEY, 'true');
+            } catch (error) {
+              console.warn('Could not persist remember-me flag for super admin login:', error);
+            }
+          }
           return;
         }
 
@@ -5916,6 +5931,13 @@ function AppClean({ initialPublicClubId = null } = {}) {
       setActiveRole(localMatchingUser.role);
       const nextClubId = localMatchingUser.clubId || clubs[0]?.id;
       if (nextClubId) setSelectedClubId(nextClubId);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(SESSION_REMEMBER_KEY, 'true');
+        } catch (error) {
+          console.warn('Could not persist remember-me flag for local login:', error);
+        }
+      }
       return;
     }
 
