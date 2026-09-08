@@ -1502,38 +1502,41 @@ function AppClean({ initialPublicClubId = null } = {}) {
         )
       ).trim();
 
+      const currentFullName = String(
+        sessionUser?.full_name ?? sessionUser?.name ?? currentUsername ?? ''
+      ).trim();
+
       try {
-        if (!currentUsername) {
-          if (!isCancelled) {
-            setParentViewProfile(null);
-            setParentViewStudents([]);
+        const usernameToUse = currentUsername || currentFullName;
+        let userProfile = { full_name: currentFullName, username: currentUsername, phone: sessionUser?.phone || '' };
+
+        if (usernameToUse) {
+          const { data: profileRow, error: profileError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('username', usernameToUse)
+            .single();
+
+          if (profileError) {
+            console.warn('Parent profile lookup failed for username:', usernameToUse, profileError);
+          } else if (profileRow) {
+            userProfile = {
+              ...profileRow,
+              full_name: String(profileRow?.full_name ?? currentFullName ?? '').trim(),
+              username: String(profileRow?.username ?? currentUsername ?? '').trim(),
+              phone: String(profileRow?.phone ?? sessionUser?.phone ?? '').trim(),
+            };
           }
-          return;
         }
-
-        const { data: profileRow, error: profileError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('username', currentUsername)
-          .single();
-
-        if (profileError || !profileRow) {
-          console.warn('Parent profile lookup failed for username:', currentUsername, profileError);
-          if (!isCancelled) {
-            setParentViewProfile(null);
-            setParentViewStudents([]);
-          }
-          return;
-        }
-
-        const userProfile = profileRow;
-        const userFullName = String(userProfile?.full_name ?? '').trim();
 
         if (!isCancelled) {
           setParentViewProfile(userProfile);
         }
 
-        if (!userFullName) {
+        const userFullNameForMatch = String(userProfile?.full_name ?? currentFullName ?? '').trim();
+        const userPhoneForMatch = String(userProfile?.phone ?? sessionUser?.phone ?? '').trim();
+
+        if (!userFullNameForMatch) {
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
@@ -1541,22 +1544,46 @@ function AppClean({ initialPublicClubId = null } = {}) {
         const { data, error } = await supabase
           .from('club_students')
           .select('*')
-          .eq('parent_name', userFullName);
+          .ilike('parent_name', `%${userFullNameForMatch.trim()}%`);
 
         if (error) {
-          console.warn('Parent student exact fetch failed:', error);
+          console.warn('Parent student ilike fetch failed:', error);
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
         if (!data || data.length === 0) {
+          if (userPhoneForMatch) {
+            const { data: phoneMatches, error: phoneError } = await supabase
+              .from('club_students')
+              .select('*')
+              .eq('parent_phone', userPhoneForMatch);
+
+            if (phoneError) {
+              console.warn('Parent student phone fallback fetch failed:', phoneError);
+              if (!isCancelled) setParentViewStudents([]);
+              return;
+            }
+
+            if (!phoneMatches || phoneMatches.length === 0) {
+              console.log('Bulunamayan Veli:', userProfile);
+              if (!isCancelled) setParentViewStudents([]);
+              return;
+            }
+
+            if (!isCancelled) {
+              setParentViewStudents([phoneMatches[0]]);
+            }
+            return;
+          }
+
           console.log('Bulunamayan Veli:', userProfile);
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
         if (!isCancelled) {
-          setParentViewStudents(data);
+          setParentViewStudents([data[0]]);
         }
       } catch (error) {
         console.error('Parent exact fetch crashed:', error);
