@@ -3807,18 +3807,17 @@ function AppClean({ initialPublicClubId = null } = {}) {
         </div>
         <div className="flex flex-wrap gap-2">
           {[
-            { key: 'statistics', label: 'İstatistikler', icon: CoinsIcon },
-            { key: 'clubs', label: 'Kulüp Listesi', icon: SchoolIcon },
-            { key: 'newClub', label: 'Yeni Kulüp Kaydet', icon: MegaphoneIcon },
-          ].map(({ key, label, icon: Icon }) => (
+            { key: 'statistics', label: 'İstatistikler' },
+            { key: 'clubs', label: 'Kulüp Listesi' },
+            { key: 'newClub', label: 'Yeni Kulüp Kaydet' },
+          ].map(({ key, label }) => (
             <button
               key={key}
-              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium ${superAdminTab === key ? 'bg-violet-600 text-white' : 'bg-slate-900 text-slate-300'}`}
+              className={`rounded-xl px-4 py-2 text-sm font-medium ${superAdminTab === key ? 'bg-violet-600 text-white' : 'bg-slate-900 text-slate-300'}`}
               onClick={() => setSuperAdminTab(key)}
               title={label}
             >
-              <Icon />
-              <span className="hidden sm:inline">{label}</span>
+              {label}
             </button>
           ))}
         </div>
@@ -4182,23 +4181,22 @@ function AppClean({ initialPublicClubId = null } = {}) {
         <div className="card-surface rounded-3xl p-3 sm:p-4">
           <div className="flex flex-wrap gap-2">
             {[
-              { key: 'info', label: 'Kulüp Bilgileri', icon: SchoolIcon },
-              { key: 'branches', label: 'Branşlar', icon: BallIcon },
-              { key: 'coaches', label: 'Antrenörler', icon: CoachIcon },
-              { key: 'pending', label: 'Bekleyenler', icon: FileClockIcon },
-              { key: 'students', label: 'Öğrenciler', icon: GraduationCapIcon },
-              { key: 'payments', label: 'Ödemeler', icon: BanknoteIcon },
-              { key: 'messages', label: 'Gelen Mesajlar', icon: EnvelopeIcon },
-              { key: 'announcements', label: 'Duyurular', icon: MegaphoneIcon },
-            ].map(({ key, label, icon: Icon }) => (
+              { key: 'info', label: 'Kulüp Bilgileri' },
+              { key: 'branches', label: 'Branşlar' },
+              { key: 'coaches', label: 'Antrenörler' },
+              { key: 'pending', label: 'Bekleyenler' },
+              { key: 'students', label: 'Öğrenciler' },
+              { key: 'payments', label: 'Ödemeler' },
+              { key: 'messages', label: 'Gelen Mesajlar' },
+              { key: 'announcements', label: 'Duyurular' },
+            ].map(({ key, label }) => (
               <button
                 key={key}
-                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold sm:text-sm ${managerTab === key ? 'bg-gradient-to-r from-violet-600 to-orange-500 text-white' : 'bg-slate-950/80 text-slate-300'}`}
+                className={`rounded-xl px-4 py-2.5 text-xs font-semibold sm:text-sm ${managerTab === key ? 'bg-gradient-to-r from-violet-600 to-orange-500 text-white' : 'bg-slate-950/80 text-slate-300'}`}
                 onClick={() => setManagerTab(key)}
                 title={label}
               >
-                <Icon />
-                <span className="hidden sm:inline">{label}</span>
+                {label}
               </button>
             ))}
           </div>
