@@ -1454,9 +1454,28 @@ function AppClean({ initialPublicClubId = null } = {}) {
   }, [coachViewClubId, selectedCoachId, users, currentUser]);
 
   useEffect(() => {
-    if (!supabase || !supabase.from || !currentUser) return undefined;
+    if (!supabase || !supabase.from) return undefined;
 
-    const isParentSession = ['parent', 'veli'].includes(String(currentUser.role ?? '').trim().toLowerCase());
+    const sessionUser = currentUser || (() => {
+      if (typeof window === 'undefined') return null;
+      try {
+        const rawSession = window.localStorage.getItem(SESSION_STORAGE_KEY);
+        if (!rawSession) return null;
+        const sessionData = JSON.parse(rawSession);
+        return sessionData?.currentUser ?? null;
+      } catch (error) {
+        console.warn('Parent session restore failed:', error);
+        return null;
+      }
+    })();
+
+    if (!sessionUser) {
+      setParentViewProfile(null);
+      setParentViewStudents([]);
+      return undefined;
+    }
+
+    const isParentSession = ['parent', 'veli'].includes(String(sessionUser.role ?? '').trim().toLowerCase());
     if (!isParentSession) {
       setParentViewProfile(null);
       setParentViewStudents([]);
@@ -1466,27 +1485,30 @@ function AppClean({ initialPublicClubId = null } = {}) {
     let isCancelled = false;
 
     const loadParentExactMatches = async () => {
-      const currentUsername = String(currentUser.username || '').trim();
-      const currentFullName = String(currentUser.full_name || currentUser.name || '').trim();
-      const currentPhone = normalizeWhatsappNumber(String(currentUser.phone || '').trim());
-      const clubId = currentUser.clubId ? normalizeDbClubId(currentUser.clubId) : null;
+      const currentUsername = String(sessionUser.username || '').trim();
+      const currentFullName = String(sessionUser.full_name || sessionUser.name || '').trim();
+      const currentPhone = String(sessionUser.phone || '').trim();
+      const clubId = sessionUser.clubId ? normalizeDbClubId(sessionUser.clubId) : null;
 
       try {
-        const parentProfileQuery = supabase
+        const profileLookup = supabase
           .from('profiles')
           .select('*')
-          .eq('role', 'parent');
+          .eq('role', 'parent')
+          .limit(50);
 
-        const parentProfileRows = currentFullName
-          ? (await parentProfileQuery
-              .or(`full_name.ilike.%${currentFullName}%,username.ilike.%${currentUsername || currentFullName}%`)
-              .limit(20)).data ?? []
-          : [];
+        const profileSearch = currentUsername || currentFullName || currentPhone
+          ? await profileLookup
+              .or(
+                `username.ilike.%${currentUsername || currentFullName}%,full_name.ilike.%${currentFullName}%,phone.eq.${currentPhone}`
+              )
+          : await profileLookup;
 
-        const exactProfile = (parentProfileRows || []).find((row) => {
+        const parentProfileRows = profileSearch?.data ?? [];
+        const exactProfile = parentProfileRows.find((row) => {
           const rowUsername = normalizeLoginUsername(String(row?.username ?? '').trim());
           const rowFullName = normalizeDuplicateText(String(row?.full_name ?? row?.name ?? '').trim());
-          const rowPhone = normalizeWhatsappNumber(String(row?.phone ?? '').trim());
+          const rowPhone = String(row?.phone ?? '').trim();
           return (
             (currentUsername && rowUsername === normalizeLoginUsername(currentUsername)) ||
             (currentFullName && rowFullName === normalizeDuplicateText(currentFullName)) ||
@@ -1494,29 +1516,51 @@ function AppClean({ initialPublicClubId = null } = {}) {
           );
         }) ?? null;
 
+        const profile = exactProfile || {
+          full_name: currentFullName,
+          phone: currentPhone,
+          username: currentUsername,
+          club_id: sessionUser.clubId || clubId,
+        };
+
         if (!isCancelled) {
-          setParentViewProfile(exactProfile);
+          setParentViewProfile(profile);
         }
 
-        const exactClubId = normalizeDbClubId((exactProfile?.club_id) || clubId || currentUser.clubId || '');
-        if (!exactClubId || !currentFullName) {
+        if (!profile.full_name && !profile.phone) {
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
-        const normalizedParentName = String(currentFullName).trim();
-        const { data: studentRows, error: studentError } = await supabase
+        const exactClubId = normalizeDbClubId((profile?.club_id) || clubId || sessionUser.clubId || '');
+
+        const studentQuery = supabase
           .from('club_students')
-          .select('*')
-          .eq('club_id', exactClubId)
-          .or(
-            `parent_name.ilike.%${normalizedParentName}%,parent_name.ilike.%${normalizeDuplicateText(normalizedParentName)}%`
-          )
+          .select('*');
+
+        let studentRequest = studentQuery;
+        if (exactClubId) {
+          studentRequest = studentRequest.eq('club_id', exactClubId);
+        }
+
+        const parentMatchFilter = profile.phone
+          ? `parent_name.ilike.%${profile.full_name}%,parent_phone.eq.${profile.phone}`
+          : `parent_name.ilike.%${profile.full_name}%`;
+
+        studentRequest = studentRequest.or(parentMatchFilter);
+
+        const { data: studentRows, error: studentError } = await studentRequest
           .order('created_at', { ascending: false })
           .limit(200);
 
         if (studentError) {
           console.warn('Parent student exact fetch failed:', studentError);
+          if (!isCancelled) setParentViewStudents([]);
+          return;
+        }
+
+        if (!studentRows || studentRows.length === 0) {
+          console.log('Bulunamayan Veli:', profile);
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
