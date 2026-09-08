@@ -999,6 +999,12 @@ function buildPaymentReminderNotificationText(studentName, amount, branchName, c
   return `${clubName} kulübü: ${studentName} öğrencisinin ${branchName} branşı aidat ödemesi gecikti. Gecikmiş tutar: ${Number(amount || 0).toLocaleString('tr-TR')} ₺. Lütfen ödeme işlemini tamamlayınız.`;
 }
 
+function isStudentRecordActive(student) {
+  const normalizedStatus = String(student?.status ?? '').trim().toLowerCase();
+  if (!normalizedStatus) return true;
+  return !['passive', 'pasif', 'inactive', 'inaktif', 'disabled', 'deactive', 'deaktif'].includes(normalizedStatus);
+}
+
 function getStudentPaymentRows(club, student) {
   if (!club || !student) return [];
 
@@ -3082,7 +3088,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const yearLabel = selectedYear !== null ? String(selectedYear) : 'Tüm Yıllar';
 
     exportTargets.forEach((club) => {
-      const clubStudents = (club.students ?? []).filter((student) => !activeReportBranchId || studentMatchesBranch(student, activeReportBranchId));
+      const clubStudents = (club.students ?? []).filter((student) => isStudentRecordActive(student) && (!activeReportBranchId || studentMatchesBranch(student, activeReportBranchId)));
 
       clubStudents.forEach((student) => {
         const attendanceEntries = Array.isArray(student.attendance) ? student.attendance : [];
@@ -3157,7 +3163,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const selectedMonth = paymentMonthFilter && paymentMonthFilter !== 'all' ? Number(paymentMonthFilter) : null;
     const selectedYear = paymentYearFilter && paymentYearFilter !== 'all' ? Number(paymentYearFilter) : null;
     const exportTargets = isSuperAdminRole(currentUser?.role)
-      ? clubs.filter((club) => Array.isArray(club.students) && club.students.length)
+      ? clubs.filter((club) => Array.isArray(club.students) && club.students.some((student) => isStudentRecordActive(student)))
       : currentClub ? [currentClub] : [];
 
     if (!exportTargets.length) {
@@ -3179,7 +3185,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     exportTargets.forEach((club) => {
       const clubPayments = Array.isArray(club.payments) ? club.payments : [];
-      const clubStudents = (club.students ?? []).filter((student) => !activeReportBranchId || studentMatchesBranch(student, activeReportBranchId));
+      const clubStudents = (club.students ?? []).filter((student) => isStudentRecordActive(student) && (!activeReportBranchId || studentMatchesBranch(student, activeReportBranchId)));
 
       clubStudents.forEach((student) => {
         const attendanceEntries = Array.isArray(student.attendance) ? student.attendance : [];
@@ -3248,8 +3254,32 @@ function AppClean({ initialPublicClubId = null } = {}) {
     });
 
     if (!summaryRows.length && !absenceRows.length && !paymentRows.length) {
-      alert('Seçilen branş ve tarih filtresi için indirilecek veri bulunamadı.');
-      return;
+      const fallbackSummaryRows = exportTargets.flatMap((club) => (club.students ?? [])
+        .filter((student) => isStudentRecordActive(student) && (!activeReportBranchId || studentMatchesBranch(student, activeReportBranchId)))
+        .map((student) => ({
+          Kulup: club.name || 'Kulüp',
+          Ogrenci: student.name || student.full_name || student.studentName || 'Öğrenci',
+          Veli: student.parentName || 'Belirtilmemiş',
+          Telefon: student.parentPhone || 'Yok',
+          Durum: student.status || 'active',
+          Branş: activeReportBranchId
+            ? (club.branches ?? []).find((branch) => branch.id === activeReportBranchId)?.name || 'Seçili Branş'
+            : (getStudentBranchIds(student).map((branchId) => (club.branches ?? []).find((branch) => branch.id === branchId)?.name).filter(Boolean).join(', ') || 'Branş Yok'),
+          Ay: monthLabel,
+          Yil: yearLabel,
+          KatilimSayisi: 0,
+          DevamsizlikSayisi: 0,
+          GecKalmaSayisi: 0,
+          ToplamAidat: 0,
+          OdenenAidat: 0,
+          KalanBorc: 0,
+        })));
+
+      if (!fallbackSummaryRows.length) {
+        return;
+      }
+
+      summaryRows.push(...fallbackSummaryRows);
     }
 
     const workbook = XLSX.utils.book_new();
@@ -3613,7 +3643,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   );
 
   const renderClubManagerPanel = () => {
-    const managerStudents = ogrenciler.length ? ogrenciler : (currentClub?.students ?? []);
+    const managerStudents = (ogrenciler.length ? ogrenciler : (currentClub?.students ?? [])).filter((student) => isStudentRecordActive(student));
     const availableManagerBranches = currentClub?.branches ?? [];
     const canExportManagerExcel = currentUser?.role === 'club-manager';
     const branchStudents = managerSelectedBranchId ? managerStudents.filter((student) => studentMatchesBranch(student, managerSelectedBranchId)) : [];
@@ -4292,7 +4322,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 bg-slate-950/40">
-                  {(currentClub?.students || []).flatMap((student) => {
+                  {(currentClub?.students || []).filter((student) => isStudentRecordActive(student)).flatMap((student) => {
                     const studentRows = getStudentPaymentRows(currentClub, student).filter((paymentRow) => {
                       const branchMatches = reportBranchFilter === 'all' || paymentRow.branchId === reportBranchFilter;
                       const monthMatches = paymentMonthFilter === 'all' || getPaymentMonthValue({ month: paymentRow.month, dueDate: paymentRow.dueDate }) === Number(paymentMonthFilter);
