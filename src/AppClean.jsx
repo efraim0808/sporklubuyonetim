@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import jsqr from 'jsqr';
+import * as XLSX from 'xlsx';
 import { supabase } from './lib/supabase';
 
 const packageOptions = [1, 3, 6, 12];
@@ -140,6 +141,11 @@ function isValidUuid(value) {
 function toDatabaseUuidOrNull(value) {
   const candidate = String(value ?? '').trim();
   return isValidUuid(candidate) ? candidate : null;
+}
+
+function formatMoney(value) {
+  const numericValue = Number(value ?? 0);
+  return Number.isFinite(numericValue) ? numericValue.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : '0';
 }
 
 function getStudentDisplayLabel(student) {
@@ -3036,6 +3042,88 @@ function AppClean({ initialPublicClubId = null } = {}) {
     setToastMessage('Mesaj silindi.');
   };
 
+  const exportStudentAttendanceAndPaymentReport = () => {
+    const exportTargets = isSuperAdminRole(currentUser?.role)
+      ? clubs.filter((club) => Array.isArray(club.students) && club.students.length)
+      : currentClub ? [currentClub] : [];
+
+    if (!exportTargets.length) {
+      alert('İndirilecek öğrenci verisi bulunamadı.');
+      return;
+    }
+
+    const summaryRows = [];
+    const absenceRows = [];
+    const paymentRows = [];
+
+    exportTargets.forEach((club) => {
+      const clubPayments = Array.isArray(club.payments) ? club.payments : [];
+      (club.students ?? []).forEach((student) => {
+        const attendanceEntries = Array.isArray(student.attendance) ? student.attendance : [];
+        const presentCount = attendanceEntries.filter((entry) => String(entry?.status ?? '').toLowerCase() === 'present').length;
+        const absentCount = attendanceEntries.filter((entry) => String(entry?.status ?? '').toLowerCase() === 'absent').length;
+        const lateCount = attendanceEntries.filter((entry) => ['late', 'geç', 'passive'].includes(String(entry?.status ?? '').toLowerCase())).length;
+        const studentPayments = clubPayments.filter((payment) => String(payment.studentId ?? payment.student_id ?? '') === String(student.id ?? ''));
+        const totalAmount = studentPayments.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
+        const paidAmount = studentPayments.filter((payment) => String(payment.status ?? '').toLowerCase() === 'ödendi' || String(payment.status ?? '').toLowerCase() === 'paid').reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
+        const pendingAmount = Math.max(totalAmount - paidAmount, 0);
+
+        const studentRow = {
+          Kulup: club.name || 'Kulüp',
+          Ogrenci: student.name || student.full_name || student.studentName || 'Öğrenci',
+          Veli: student.parentName || 'Belirtilmemiş',
+          Telefon: student.parentPhone || 'Yok',
+          Durum: student.status || 'active',
+          KatilimSayisi: presentCount,
+          DevamsizlikSayisi: absentCount,
+          GecKalmaSayisi: lateCount,
+          ToplamAidat: totalAmount,
+          OdenenAidat: paidAmount,
+          KalanBorc: pendingAmount,
+        };
+
+        summaryRows.push(studentRow);
+
+        attendanceEntries.forEach((entry) => {
+          absenceRows.push({
+            Kulup: club.name || 'Kulüp',
+            Ogrenci: student.name || student.full_name || student.studentName || 'Öğrenci',
+            Veli: student.parentName || 'Belirtilmemiş',
+            Tarih: entry?.date || '',
+            Durum: entry?.status || 'pending',
+            Not: entry?.note || '',
+          });
+        });
+
+        studentPayments.forEach((payment) => {
+          paymentRows.push({
+            Kulup: club.name || 'Kulüp',
+            Ogrenci: student.name || student.full_name || student.studentName || 'Öğrenci',
+            Veli: student.parentName || 'Belirtilmemiş',
+            Ay: payment.month || payment.month_label || payment.dueDate || '',
+            Tutar: Number(payment.amount ?? 0),
+            Durum: payment.status || 'Ödenmedi',
+            SonOdemeTarihi: payment.dueDate || payment.created_at || '',
+          });
+        });
+      });
+    });
+
+    const workbook = XLSX.utils.book_new();
+    const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+    const absenceSheet = XLSX.utils.json_to_sheet(absenceRows);
+    const paymentSheet = XLSX.utils.json_to_sheet(paymentRows);
+
+    XLSX.utils.book_append_sheet(workbook, summarySheet, 'Genel Ozet');
+    XLSX.utils.book_append_sheet(workbook, absenceSheet, 'Devamsizlik');
+    XLSX.utils.book_append_sheet(workbook, paymentSheet, 'Aidat');
+
+    const fileName = `${(isSuperAdminRole(currentUser?.role) ? 'super-admin' : (currentClub?.name || 'kulup')).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}-raporu-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+  };
+
+  const canExportExcelReport = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager';
+
   const renderSuperAdminPanel = () => (
     <div className="space-y-6">
       <div className="card-surface rounded-3xl p-4">
@@ -3043,6 +3131,17 @@ function AppClean({ initialPublicClubId = null } = {}) {
           <h2 className="text-2xl font-bold text-white">Süper Admin Paneli</h2>
           <span className="status-pill bg-violet-500/15 text-violet-300">Platform Sahibi</span>
         </div>
+        {canExportExcelReport && (
+          <div className="mb-4 flex justify-end">
+            <button
+              type="button"
+              className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+              onClick={exportStudentAttendanceAndPaymentReport}
+            >
+              📥 Excel Raporu İndir
+            </button>
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           {['statistics', 'clubs', 'newClub'].map((tab) => (
             <button
@@ -3370,6 +3469,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const renderClubManagerPanel = () => {
     const managerStudents = ogrenciler.length ? ogrenciler : (currentClub?.students ?? []);
     const availableManagerBranches = currentClub?.branches ?? [];
+    const canExportManagerExcel = currentUser?.role === 'club-manager';
     const branchStudents = managerSelectedBranchId ? managerStudents.filter((student) => studentMatchesBranch(student, managerSelectedBranchId)) : [];
     const selectedManagerStudent = branchStudents.find((student) => student.id === managerSelectedStudentId) ?? branchStudents[0] ?? null;
     const managerCoaches = users.filter((user) => {
