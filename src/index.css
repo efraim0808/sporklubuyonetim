@@ -14,6 +14,53 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.theme-light {
+  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+  color: #0f172a;
+}
+
+.theme-light .card-surface,
+.theme-light .bg-slate-900\/80,
+.theme-light .bg-slate-950\/70,
+.theme-light .bg-slate-950\/80,
+.theme-light .bg-slate-950\/60,
+.theme-light .bg-slate-900\/70,
+.theme-light .bg-slate-900,
+.theme-light .bg-slate-950 {
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-color: rgba(96, 165, 250, 0.3) !important;
+}
+
+.theme-light .primary-btn {
+  background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%);
+  box-shadow: 0 12px 32px rgba(37, 99, 235, 0.25);
+}
+
+.theme-light .secondary-btn {
+  background: #eff6ff;
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #0f172a;
+}
+
+.theme-light .input-shell {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(96, 165, 250, 0.35);
+  color: #0f172a;
+}
+
+.theme-light .input-shell::placeholder,
+.theme-light .text-slate-300,
+.theme-light .text-slate-400,
+.theme-light .text-slate-200,
+.theme-light .text-slate-500 {
+  color: #475569 !important;
+}
+
+.theme-light .text-white,
+.theme-light .text-slate-100 {
+  color: #0f172a !important;
+}
+
 html, body, #root {
   margin: 0;
   min-height: 100%;

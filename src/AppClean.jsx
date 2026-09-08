@@ -1016,9 +1016,13 @@ function isStudentRecordActive(student) {
   const normalizedStatus = String(student?.status ?? '').trim().toLowerCase();
   if (!normalizedStatus) return true;
 
-  // Pasif öğrenciler listeden tamamen kaldırılmasın; sadece pasif etiketli görünümde kalsınlar.
-  // Sadece gerçek silme/soft-delete benzeri durumlar görünümden çıkarılsın.
   return !['deleted', 'silindi', 'removed', 'kaldirildi'].includes(normalizedStatus);
+}
+
+function isStudentRecordPassive(student) {
+  const normalizedStatus = String(student?.status ?? '').trim().toLowerCase();
+  if (!normalizedStatus) return false;
+  return ['passive', 'pasif', 'inactive', 'inaktif', 'disabled', 'deactive', 'deaktif'].includes(normalizedStatus);
 }
 
 function getStudentPaymentRows(club, student) {
@@ -1218,6 +1222,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [showKvkkModal, setShowKvkkModal] = useState(false);
   const [whatsappEditState, setWhatsappEditState] = useState({ open: false, phone: '', text: '', studentName: '' });
   const [profilePassword, setProfilePassword] = useState({ newPassword: '', confirmPassword: '' });
+  const [themeMode, setThemeMode] = useState(() => {
+    if (typeof window === 'undefined') return 'dark';
+    try {
+      return window.localStorage.getItem('sporthub_theme') || 'dark';
+    } catch (error) {
+      return 'dark';
+    }
+  });
   const [showCoachPassword, setShowCoachPassword] = useState(false);
   const [showParentPassword, setShowParentPassword] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -1254,6 +1266,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return urlSearchParams.get('club');
   });
   const [publicClubDetails, setPublicClubDetails] = useState(null);
+  const [showPassiveStudentsOnly, setShowPassiveStudentsOnly] = useState(false);
+  const [showPassiveDetailStudents, setShowPassiveDetailStudents] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1319,6 +1333,17 @@ function AppClean({ initialPublicClubId = null } = {}) {
       })
     );
   }, [sessionHydrated, currentUser, activeRole, selectedClubId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('sporthub_theme', themeMode);
+      document.documentElement.classList.toggle('theme-light', themeMode === 'light');
+      document.documentElement.classList.toggle('theme-dark', themeMode !== 'light');
+    } catch (error) {
+      console.warn('Theme persist failed:', error);
+    }
+  }, [themeMode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -3601,6 +3626,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return [...branchMap.values()];
   }, [clubs, currentClub, currentUser]);
 
+  const canSeePassiveStudentsToggle = ['super-admin', 'club-manager'].includes(String(currentUser?.role ?? '').trim().toLowerCase());
+
   const renderSuperAdminPanel = () => (
     <div className="space-y-6">
       <div className="card-surface rounded-3xl p-4">
@@ -3840,6 +3867,20 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   </div>
 
                   <div className="max-h-[70vh] overflow-y-auto p-5">
+                    <div className="mb-3 flex justify-end">
+                      {canSeePassiveStudentsToggle && (
+                        <button
+                          type="button"
+                          className={`inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition ${showPassiveDetailStudents ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-950/80 text-slate-300'}`}
+                          onClick={() => setShowPassiveDetailStudents((prev) => !prev)}
+                          title="Pasif öğrencileri göster"
+                        >
+                          <span aria-hidden="true">⏸</span>
+                          <span>{showPassiveDetailStudents ? 'Pasifler' : 'Pasif'}</span>
+                        </button>
+                      )}
+                    </div>
+
                     <div className="grid gap-4 lg:grid-cols-2">
                       <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
                         <div className="mb-3 flex items-center justify-between">
@@ -3875,23 +3916,25 @@ function AppClean({ initialPublicClubId = null } = {}) {
                           <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-1 text-xs text-slate-300">{detailClub.students?.length ?? 0}</span>
                         </div>
                         <div className="space-y-3">
-                          {(detailClub.students ?? []).length ? (
-                            (detailClub.students ?? []).map((student) => (
+                          {((detailClub.students ?? []).filter((student) => showPassiveDetailStudents ? isStudentRecordPassive(student) : isStudentRecordActive(student))).length ? (
+                            (detailClub.students ?? []).filter((student) => showPassiveDetailStudents ? isStudentRecordPassive(student) : isStudentRecordActive(student)).map((student) => (
                               <div key={student.id || `${student.name}-${student.parentPhone}`} className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
                                     <div className="font-medium text-white">{student.name || student.full_name || student.studentName || 'Öğrenci'}</div>
                                     <div className="text-xs text-slate-400">Veli: {student.parentName || 'Belirtilmemiş'}</div>
                                   </div>
-                                  <span className={`status-pill ${student.status === 'active' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-500/15 text-slate-300'}`}>
-                                    {student.status || 'active'}
+                                  <span className={`status-pill ${isStudentRecordPassive(student) ? 'bg-amber-500/15 text-amber-200' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                                    {isStudentRecordPassive(student) ? 'Pasif' : (student.status || 'active')}
                                   </span>
                                 </div>
                                 <div className="mt-2 text-xs text-slate-400">{student.parentPhone ? formatWhatsappDisplay(student.parentPhone) : 'Telefon yok'}</div>
                               </div>
                             ))
                           ) : (
-                            <div className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">Bu kulübe ait öğrenci kaydı yok.</div>
+                            <div className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">
+                              {showPassiveDetailStudents ? 'Bu kulüpte pasif öğrenci kaydı yok.' : 'Bu kulübe ait öğrenci kaydı yok.'}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -3933,7 +3976,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
   );
 
   const renderClubManagerPanel = () => {
-    const managerStudents = (ogrenciler.length ? ogrenciler : (currentClub?.students ?? [])).filter((student) => isStudentRecordActive(student));
+    const managerStudents = (ogrenciler.length ? ogrenciler : (currentClub?.students ?? [])).filter((student) => {
+      if (showPassiveStudentsOnly) return isStudentRecordPassive(student);
+      return isStudentRecordActive(student);
+    });
     const availableManagerBranches = currentClub?.branches ?? [];
     const canExportManagerExcel = currentUser?.role === 'club-manager';
     const branchStudents = managerSelectedBranchId ? managerStudents.filter((student) => studentMatchesBranch(student, managerSelectedBranchId)) : [];
@@ -4385,7 +4431,20 @@ function AppClean({ initialPublicClubId = null } = {}) {
         {managerTab === 'students' && (
           <div className="card-surface rounded-3xl p-4 sm:p-6">
             <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-              <h3 className="text-xl font-semibold text-white">Öğrenci Takibi</h3>
+              <div className="flex items-center gap-3">
+                <h3 className="text-xl font-semibold text-white">Öğrenci Takibi</h3>
+                {canSeePassiveStudentsToggle && (
+                  <button
+                    type="button"
+                    className={`inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition ${showPassiveStudentsOnly ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-950/80 text-slate-300'}`}
+                    onClick={() => setShowPassiveStudentsOnly((prev) => !prev)}
+                    title="Pasif öğrencileri göster"
+                  >
+                    <span aria-hidden="true">⏸</span>
+                    <span>{showPassiveStudentsOnly ? 'Pasifler' : 'Pasif'}</span>
+                  </button>
+                )}
+              </div>
               {canAccessStudentAttendanceExport && (
                 <div className="flex flex-wrap items-center gap-2">
                   <select className="input-shell min-w-[150px]" value={managerSelectedBranchId} onChange={(e) => { setManagerSelectedBranchId(e.target.value); setManagerSelectedStudentId(''); }}>
@@ -4437,7 +4496,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
             </div>
 
             {!managerSelectedBranchId || !selectedManagerStudent ? (
-              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400">Önce bir branş seçin, ardından öğrenciyi seçin.</div>
+              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400">
+                {showPassiveStudentsOnly
+                  ? 'Pasif öğrenciler için uygun kayıt bulunamadı.'
+                  : 'Önce bir branş seçin, ardından öğrenciyi seçin.'}
+              </div>
             ) : (
               <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -5076,6 +5139,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <input className="input-shell" type="password" placeholder="Yeni Şifre" value={profilePassword.newPassword} onChange={(e) => setProfilePassword({ ...profilePassword, newPassword: e.target.value })} />
               <input className="input-shell" type="password" placeholder="Şifre Onayı" value={profilePassword.confirmPassword} onChange={(e) => setProfilePassword({ ...profilePassword, confirmPassword: e.target.value })} />
             </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <label className="space-y-2 text-sm text-slate-300">
+                <span className="block text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Tema</span>
+                <select className="input-shell" value={themeMode} onChange={(event) => setThemeMode(event.target.value)}>
+                  <option value="dark">Koyu</option>
+                  <option value="light">Açık</option>
+                </select>
+              </label>
+            </div>
             <div className="mt-4 flex justify-end">
               <button className="primary-btn" onClick={handlePasswordUpdate}>Şifreyi Güncelle</button>
             </div>
@@ -5549,6 +5621,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <div className="grid gap-3 md:grid-cols-2">
                 <input className="input-shell" type="password" placeholder="Yeni Şifre" value={profilePassword.newPassword} onChange={(e) => setProfilePassword({ ...profilePassword, newPassword: e.target.value })} />
                 <input className="input-shell" type="password" placeholder="Şifre Onayı" value={profilePassword.confirmPassword} onChange={(e) => setProfilePassword({ ...profilePassword, confirmPassword: e.target.value })} />
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="space-y-2 text-sm text-slate-300">
+                  <span className="block text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Tema</span>
+                  <select className="input-shell" value={themeMode} onChange={(event) => setThemeMode(event.target.value)}>
+                    <option value="dark">Koyu</option>
+                    <option value="light">Açık</option>
+                  </select>
+                </label>
               </div>
               <div className="mt-4 flex justify-end">
                 <button className="primary-btn" onClick={handlePasswordUpdate}>Şifreyi Güncelle</button>
@@ -6988,7 +7069,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
           </div>
         </div>
       )}
-      <div className="min-h-screen bg-slate-950 px-4 py-6 text-white">
+      <div className={`min-h-screen px-4 py-6 ${themeMode === 'light' ? 'theme-light bg-slate-50 text-slate-900' : 'bg-slate-950 text-white'}`}>
         <div className="mx-auto max-w-7xl">
           <header className="mb-6 flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-4 md:flex-row md:items-center md:justify-between">
             <div>
