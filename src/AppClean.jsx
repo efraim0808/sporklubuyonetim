@@ -1137,6 +1137,42 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const forcedPublicClubId = urlSearchParams.get('club') || initialPublicClubId || null;
 
   const SESSION_STORAGE_KEY = 'sporthub_session_v1';
+  const SESSION_REMEMBER_KEY = 'sporthub_remember_me';
+
+  const clearPersistedAuthState = () => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      window.localStorage.clear();
+    } catch (error) {
+      console.warn('Could not clear localStorage:', error);
+    }
+
+    try {
+      window.sessionStorage.clear();
+    } catch (error) {
+      console.warn('Could not clear sessionStorage:', error);
+    }
+
+    try {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete('club');
+      window.history.replaceState({}, '', nextUrl);
+    } catch (error) {
+      console.warn('Could not clear URL club param:', error);
+    }
+  };
+
+  const shouldRestorePersistedSession = () => {
+    if (typeof window === 'undefined') return false;
+
+    try {
+      return window.localStorage.getItem(SESSION_REMEMBER_KEY) === 'true';
+    } catch (error) {
+      console.warn('Could not read remember-me flag:', error);
+      return false;
+    }
+  };
 
   const [currentUser, setCurrentUser] = useState(null);
   const [clubs, setClubs] = useState(initialClubs);
@@ -1223,8 +1259,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
     }
 
     try {
+      const shouldRestore = shouldRestorePersistedSession();
+      if (!shouldRestore) {
+        clearPersistedAuthState();
+        setSessionHydrated(true);
+        return;
+      }
+
       const rawSession = window.localStorage.getItem(SESSION_STORAGE_KEY);
       if (!rawSession) {
+        clearPersistedAuthState();
         setSessionHydrated(true);
         return;
       }
@@ -1236,10 +1280,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
         if (savedSession.selectedClubId) {
           setSelectedClubId(savedSession.selectedClubId);
         }
+      } else {
+        clearPersistedAuthState();
       }
     } catch (error) {
       console.warn('Session restore failed:', error);
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      clearPersistedAuthState();
     } finally {
       setSessionHydrated(true);
     }
@@ -1249,7 +1295,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
     if (!sessionHydrated || typeof window === 'undefined') return;
 
     if (!currentUser) {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      clearPersistedAuthState();
+      clearLoginForm();
+      return;
+    }
+
+    const shouldRemember = shouldRestorePersistedSession();
+    if (!shouldRemember) {
+      clearPersistedAuthState();
       clearLoginForm();
       return;
     }
@@ -1266,6 +1319,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    clearPersistedAuthState();
     clearLoginForm();
   }, []);
 
@@ -2091,10 +2145,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
     document.title = 'Spor Kulüpleri ve Okulları Yönetim Sistemi';
 
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
-      const nextUrl = new URL(window.location.href);
-      nextUrl.searchParams.delete('club');
-      window.history.replaceState({}, '', nextUrl);
+      clearPersistedAuthState();
+      try {
+        window.localStorage.setItem(SESSION_REMEMBER_KEY, 'false');
+      } catch (error) {
+        console.warn('Could not set remember-me flag to false:', error);
+      }
     }
   };
 
@@ -2215,10 +2271,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       setClubListSearch('');
 
       if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('sporthub_session_v1');
-        const nextUrl = new URL(window.location.href);
-        nextUrl.searchParams.delete('club');
-        window.history.replaceState({}, '', nextUrl);
+        clearPersistedAuthState();
       }
 
       setToastMessage('Tüm kulüp verileri başarıyla temizlendi.');
