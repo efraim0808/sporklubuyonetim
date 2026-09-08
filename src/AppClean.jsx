@@ -1191,6 +1191,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [parentFilterBranchId, setParentFilterBranchId] = useState('');
   const [parentFilterStudentId, setParentFilterStudentId] = useState('');
   const [toastMessage, setToastMessage] = useState('');
+  const [parentViewProfile, setParentViewProfile] = useState(null);
+  const [parentViewStudents, setParentViewStudents] = useState([]);
   const [managerPasswordReset, setManagerPasswordReset] = useState({ open: false, clubId: '', newPassword: '' });
   const [publicFormClubId, setPublicFormClubId] = useState(() => {
     if (initialPublicClubId) return initialPublicClubId;
@@ -1450,6 +1452,120 @@ function AppClean({ initialPublicClubId = null } = {}) {
       setCoachViewCoachId(selectedCoachId);
     }
   }, [coachViewClubId, selectedCoachId, users, currentUser]);
+
+  useEffect(() => {
+    if (!supabase || !supabase.from || !currentUser) return undefined;
+
+    const isParentSession = ['parent', 'veli'].includes(String(currentUser.role ?? '').trim().toLowerCase());
+    if (!isParentSession) {
+      setParentViewProfile(null);
+      setParentViewStudents([]);
+      return undefined;
+    }
+
+    let isCancelled = false;
+
+    const loadParentExactMatches = async () => {
+      const currentUsername = String(currentUser.username || '').trim();
+      const currentFullName = String(currentUser.full_name || currentUser.name || '').trim();
+      const currentPhone = normalizeWhatsappNumber(String(currentUser.phone || '').trim());
+      const clubId = currentUser.clubId ? normalizeDbClubId(currentUser.clubId) : null;
+
+      try {
+        let profileQuery = supabase
+          .from('profiles')
+          .select('*')
+          .eq('role', 'parent');
+
+        if (currentUsername) {
+          profileQuery = profileQuery.eq('username', currentUsername);
+        }
+
+        if (currentFullName) {
+          profileQuery = profileQuery.eq('full_name', currentFullName);
+        }
+
+        if (clubId) {
+          profileQuery = profileQuery.eq('club_id', clubId);
+        }
+
+        const { data: profileRows, error: profileError } = await profileQuery.limit(20);
+        if (profileError) {
+          console.warn('Parent profile exact fetch failed:', profileError);
+          if (!isCancelled) {
+            setParentViewProfile(null);
+            setParentViewStudents([]);
+          }
+          return;
+        }
+
+        const exactProfile = (profileRows ?? []).find((row) => {
+          const rowUsername = normalizeLoginUsername(String(row?.username ?? '').trim());
+          const rowFullName = normalizeDuplicateText(String(row?.full_name ?? row?.name ?? '').trim());
+          const rowPhone = normalizeWhatsappNumber(String(row?.phone ?? '').trim());
+          return (
+            (currentUsername && rowUsername && rowUsername === normalizeLoginUsername(currentUsername)) ||
+            (currentFullName && rowFullName && rowFullName === normalizeDuplicateText(currentFullName)) ||
+            (currentPhone && rowPhone && rowPhone === currentPhone)
+          );
+        }) ?? null;
+
+        if (!isCancelled) {
+          setParentViewProfile(exactProfile);
+        }
+
+        if (!exactProfile) {
+          if (!isCancelled) setParentViewStudents([]);
+          return;
+        }
+
+        let studentQuery = supabase
+          .from('club_students')
+          .select('*')
+          .eq('club_id', normalizeDbClubId(exactProfile.club_id) || clubId || currentUser.clubId || '');
+
+        if (currentFullName) {
+          studentQuery = studentQuery.eq('parent_name', currentFullName);
+        }
+
+        if (currentPhone) {
+          studentQuery = studentQuery.eq('parent_phone', currentPhone);
+        }
+
+        const { data: studentRows, error: studentError } = await studentQuery.order('created_at', { ascending: false }).limit(200);
+        if (studentError) {
+          console.warn('Parent student exact fetch failed:', studentError);
+          if (!isCancelled) setParentViewStudents([]);
+          return;
+        }
+
+        const filteredStudentRows = (studentRows ?? []).filter((student) => {
+          const studentParentName = normalizeDuplicateText(String(student?.parent_name ?? student?.parentName ?? '').trim());
+          const studentParentPhone = normalizeWhatsappNumber(String(student?.parent_phone ?? student?.parentPhone ?? '').trim());
+          const rowMatchesName = Boolean(currentFullName && studentParentName && studentParentName === normalizeDuplicateText(currentFullName));
+          const rowMatchesPhone = Boolean(currentPhone && studentParentPhone && studentParentPhone === currentPhone);
+          const rowMatchesUsername = Boolean(currentUsername && studentParentName && normalizeLoginUsername(currentUsername) === normalizeLoginUsername(studentParentName));
+          return rowMatchesName || rowMatchesPhone || rowMatchesUsername;
+        });
+
+        if (!isCancelled) {
+          setParentViewStudents(filteredStudentRows);
+        }
+      } catch (error) {
+        console.error('Parent exact fetch crashed:', error);
+        if (!isCancelled) {
+          setParentViewProfile(null);
+          setParentViewStudents([]);
+        }
+      }
+    };
+
+    loadParentExactMatches();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentUser, supabase]);
 
   useEffect(() => {
     if (!supabase || !supabase.from) return undefined;
@@ -5001,7 +5117,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     });
 
     const allParentClubStudents = isPlainParentSession
-      ? getCurrentParentStudentMatches(currentUser, clubs)
+      ? (parentViewStudents.length ? parentViewStudents : [])
       : (activeParentClub?.students ?? []);
 
     const effectiveParentStudents = dedupeById(
