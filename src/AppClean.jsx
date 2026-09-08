@@ -1186,6 +1186,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [users, setUsers] = useState(initialUsers);
   const [activeRole, setActiveRole] = useState('super-admin');
   const [sessionHydrated, setSessionHydrated] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [superAdminTab, setSuperAdminTab] = useState('statistics');
   const [managerTab, setManagerTab] = useState('info');
   const [selectedClubId, setSelectedClubId] = useState('');
@@ -1270,46 +1271,78 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [showPassiveDetailStudents, setShowPassiveDetailStudents] = useState(false);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      setSessionHydrated(true);
-      return;
-    }
+    let isMounted = true;
 
-    try {
-      const shouldRestore = shouldRestorePersistedSession();
-      if (!shouldRestore) {
-        clearPersistedAuthState();
-        setSessionHydrated(true);
-        return;
-      }
-
-      const rawSession = window.localStorage.getItem(SESSION_STORAGE_KEY);
-      if (!rawSession) {
-        clearPersistedAuthState();
-        setSessionHydrated(true);
-        return;
-      }
-
-      const savedSession = JSON.parse(rawSession);
-      if (savedSession?.currentUser) {
-        setCurrentUser(savedSession.currentUser);
-        setActiveRole(savedSession.activeRole || savedSession.currentUser.role || 'super-admin');
-        if (savedSession.selectedClubId) {
-          setSelectedClubId(savedSession.selectedClubId);
+    const restoreSession = async () => {
+      if (typeof window === 'undefined') {
+        if (isMounted) {
+          setSessionHydrated(true);
+          setIsLoading(false);
         }
-      } else {
-        clearPersistedAuthState();
+        return;
       }
-    } catch (error) {
-      console.warn('Session restore failed:', error);
-      clearPersistedAuthState();
-    } finally {
-      setSessionHydrated(true);
-    }
+
+      try {
+        const shouldRemember = shouldRestorePersistedSession();
+        const rawSession = window.localStorage.getItem(SESSION_STORAGE_KEY);
+
+        if (!shouldRemember || !rawSession) {
+          clearPersistedAuthState();
+          if (isMounted) {
+            setCurrentUser(null);
+            setSessionHydrated(true);
+            setIsLoading(false);
+          }
+          return;
+        }
+
+        const savedSession = JSON.parse(rawSession);
+        if (savedSession?.currentUser) {
+          setCurrentUser(savedSession.currentUser);
+          setActiveRole(savedSession.activeRole || savedSession.currentUser.role || 'super-admin');
+          if (savedSession.selectedClubId) {
+            setSelectedClubId(savedSession.selectedClubId);
+          }
+        } else {
+          clearPersistedAuthState();
+          setCurrentUser(null);
+        }
+
+        if (supabase?.auth?.getSession) {
+          try {
+            const { data: { session }, error } = await supabase.auth.getSession();
+            if (error) {
+              console.warn('Supabase session read failed during app bootstrap:', error);
+            }
+            if (!session && !savedSession?.currentUser) {
+              clearPersistedAuthState();
+              setCurrentUser(null);
+            }
+          } catch (error) {
+            console.warn('Supabase session bootstrap check crashed:', error);
+          }
+        }
+      } catch (error) {
+        console.warn('Session restore failed:', error);
+        clearPersistedAuthState();
+        setCurrentUser(null);
+      } finally {
+        if (isMounted) {
+          setSessionHydrated(true);
+          setIsLoading(false);
+        }
+      }
+    };
+
+    restoreSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
-    if (!sessionHydrated || typeof window === 'undefined') return;
+    if (isLoading || !sessionHydrated || typeof window === 'undefined') return;
 
     if (!currentUser) {
       clearPersistedAuthState();
@@ -1332,7 +1365,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
         selectedClubId,
       })
     );
-  }, [sessionHydrated, currentUser, activeRole, selectedClubId]);
+  }, [isLoading, sessionHydrated, currentUser, activeRole, selectedClubId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -5945,6 +5978,18 @@ function AppClean({ initialPublicClubId = null } = {}) {
     alert('Giriş bilgileri hatalı. Kullanıcı adı ve şifreyi kontrol edin.');
   };
 
+  const renderLoadingScreen = () => (
+    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-10 text-white">
+      <div className="flex flex-col items-center gap-4 rounded-[28px] border border-slate-800 bg-slate-900/80 px-8 py-10 shadow-glow">
+        <div className="h-14 w-14 animate-spin rounded-full border-4 border-slate-700 border-t-violet-500" />
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-[0.25em] text-violet-300">SportHub</p>
+          <h2 className="mt-2 text-xl font-semibold text-white">Oturum kontrol ediliyor...</h2>
+        </div>
+      </div>
+    </div>
+  );
+
   const renderLoginScreen = () => (
     <div className="min-h-screen bg-slate-950 px-4 py-10 text-white">
       <div className="mx-auto max-w-6xl">
@@ -6940,6 +6985,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
     </div>
     );
   };
+
+  if (isLoading) {
+    return renderLoadingScreen();
+  }
 
   if (!currentUser) {
     if (forcedPublicClubId || isPublicRegistrationRoute || shouldShowPublicForm) {
