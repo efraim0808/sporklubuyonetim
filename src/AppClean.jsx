@@ -4744,6 +4744,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
   const renderParentPanel = () => {
     const adminFilterEnabled = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager' || activeRole === 'club-manager' || activeRole === 'super-admin' || activeRole === 'super_admin';
+    const isPlainParentSession = !adminFilterEnabled && (currentUser?.role === 'parent' || currentUser?.role === 'veli' || activeRole === 'parent' || activeRole === 'veli');
 
     const availableClubOptions = adminFilterEnabled
       ? clubs
@@ -4798,7 +4799,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       const studentParentPhone = normalizeWhatsappNumber(student?.parentPhone ?? student?.parent_phone ?? '');
       const studentParentId = String(student?.parentId ?? student?.parent_id ?? '').trim();
 
-      if (currentUser?.role === 'parent' || currentUser?.role === 'veli' || activeRole === 'parent' || activeRole === 'veli') {
+      if (isPlainParentSession) {
         const matchedByParentId = parentProfileIds.some((parentId) => {
           if (!parentId) return false;
           return parentId === studentParentId || parentId === String(student?.parentId ?? student?.parent_id ?? '').trim();
@@ -4813,7 +4814,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return true;
     });
 
-    const allParentClubStudents = currentUser?.role === 'parent' || currentUser?.role === 'veli' || activeRole === 'parent' || activeRole === 'veli'
+    const allParentClubStudents = isPlainParentSession
       ? getCurrentParentStudentMatches(currentUser, clubs)
       : (activeParentClub?.students ?? []);
 
