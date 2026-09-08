@@ -4,8 +4,9 @@
 
 BEGIN;
 
--- 1) Remove notification records first so they do not block other deletions.
+-- 1) Remove notification and message records first so they do not block other deletions.
 DELETE FROM public.club_notifications;
+DELETE FROM public.club_messages;
 
 -- 2) Remove application records next to avoid FK conflicts.
 DELETE FROM public.club_applications;
@@ -27,6 +28,14 @@ DELETE FROM public.clubs;
 DELETE FROM public.profiles
 WHERE role IS NOT NULL
   AND LOWER(role) NOT IN ('super-admin', 'super_admin');
+
+ALTER TABLE public.club_notifications ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "club_notifications_all_access" ON public.club_notifications;
+CREATE POLICY "club_notifications_all_access"
+  ON public.club_notifications
+  FOR ALL
+  USING (true)
+  WITH CHECK (true);
 
 INSERT INTO public.profiles (id, club_id, role, full_name, username, password, email, phone, is_active, created_at)
 VALUES (

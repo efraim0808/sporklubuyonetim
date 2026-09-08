@@ -142,6 +142,12 @@ function toDatabaseUuidOrNull(value) {
   return isValidUuid(candidate) ? candidate : null;
 }
 
+function getStudentDisplayLabel(student) {
+  const studentName = String(student?.name ?? student?.full_name ?? student?.studentName ?? 'Öğrenci').trim() || 'Öğrenci';
+  const parentName = String(student?.parentName ?? student?.parent_name ?? '').trim();
+  return parentName ? `${studentName} • ${parentName}` : studentName;
+}
+
 async function insertIntoSupabase(table, rows, options = {}) {
   if (!table || !Array.isArray(rows) || !rows.length) return { ok: true, inserted: 0, data: [] };
   if (!supabase || !supabase.from) {
@@ -157,6 +163,17 @@ async function insertIntoSupabase(table, rows, options = {}) {
     if (cleanRow.id && !isValidUuid(String(cleanRow.id))) {
       delete cleanRow.id;
     }
+
+    ['club_id', 'user_id', 'student_id', 'branch_id'].forEach((key) => {
+      if (key in cleanRow) {
+        const sanitizedValue = toDatabaseUuidOrNull(cleanRow[key]);
+        if (sanitizedValue) {
+          cleanRow[key] = sanitizedValue;
+        } else {
+          delete cleanRow[key];
+        }
+      }
+    });
 
     const allowedKeysByTable = {
       clubs: new Set(['id', 'name', 'manager_name', 'phone', 'whatsapp_number', 'address', 'username', 'password', 'suspended', 'subscription', 'created_at']),
@@ -3816,7 +3833,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 <select className="input-shell w-full" value={managerSelectedStudentId} onChange={(e) => setManagerSelectedStudentId(e.target.value)} disabled={!managerSelectedBranchId}>
                   <option value="">Öğrenci seçin</option>
                   {branchStudents.map((student, studentIndex) => (
-                    <option key={`${student.id ?? student.name ?? 'student'}-${studentIndex}`} value={student.id}>{student.name}</option>
+                    <option key={`${student.id ?? student.name ?? 'student'}-${studentIndex}`} value={student.id}>{getStudentDisplayLabel(student)}</option>
                   ))}
                 </select>
               </div>
@@ -4932,7 +4949,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 >
                   <option value="">Veli / Öğrenci Seç</option>
                   {branchStudents.map((student, studentIndex) => (
-                    <option key={`${student.id ?? 'student-option'}-${studentIndex}`} value={student.id}>{student.name || student.full_name || student.studentName || 'Öğrenci'} • {student.parentName || 'Veli'}</option>
+                    <option key={`${student.id ?? 'student-option'}-${studentIndex}`} value={student.id}>{getStudentDisplayLabel(student)}</option>
                   ))}
                 </select>
               </label>
