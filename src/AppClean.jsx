@@ -1821,31 +1821,60 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const canonicalInputUsername = normalizeLoginUsername(cleanedUsername);
     const normalizedInputText = normalizeAuthText(cleanedUsername);
 
-    const directSupabaseMatch = users.find((user) => {
+    const exactMatches = users.filter((user) => {
       const userRole = user.role;
-      const isSuperAdminAccount = isSuperAdminRole(userRole) || isSuperAdminRole(role);
-      const userKey = user.username ?? user.name ?? '';
+      const userKey = String(user.username ?? user.name ?? '').trim();
+      const userEmail = String(user.email ?? '').trim();
+      const userFullName = String(user.full_name ?? user.name ?? '').trim();
       const canonicalUserKey = normalizeLoginUsername(userKey);
+      const canonicalUserEmail = normalizeLoginUsername(userEmail);
+      const canonicalUserFullName = normalizeLoginUsername(userFullName);
+      const normalizedDbUserKey = normalizeAuthText(userKey);
+      const normalizedDbEmail = normalizeAuthText(userEmail);
+      const normalizedDbFullName = normalizeAuthText(userFullName);
+      const matchesRole = role ? userRole === role : true;
+      const exactUsername = canonicalUserKey === canonicalInputUsername || normalizedDbUserKey === normalizedInputText;
+      const exactEmail = canonicalUserEmail === canonicalInputUsername || normalizedDbEmail === normalizedInputText;
+      const exactName = canonicalUserFullName === canonicalInputUsername || normalizedDbFullName === normalizedInputText;
+      const userPhone = normalizeWhatsappNumber(user.phone ?? '');
+      const matchesPhone = Boolean(userPhone && normalizedInput && userPhone === normalizedInput);
+      const credentialsMatch = enteredPassword === String(user.password ?? '').trim();
+
+      return matchesRole && credentialsMatch && (exactUsername || exactEmail || exactName || matchesPhone);
+    });
+
+    if (exactMatches.length) {
+      return exactMatches.sort((left, right) => {
+        const leftScore = [
+          Number(String(left.username ?? '').trim().toLowerCase() === cleanedUsername.toLowerCase()),
+          Number(String(left.email ?? '').trim().toLowerCase() === cleanedUsername.toLowerCase()),
+          Number(String(left.full_name ?? left.name ?? '').trim().toLowerCase() === cleanedUsername.toLowerCase()),
+        ].reduce((total, value) => total + value, 0);
+        const rightScore = [
+          Number(String(right.username ?? '').trim().toLowerCase() === cleanedUsername.toLowerCase()),
+          Number(String(right.email ?? '').trim().toLowerCase() === cleanedUsername.toLowerCase()),
+          Number(String(right.full_name ?? right.name ?? '').trim().toLowerCase() === cleanedUsername.toLowerCase()),
+        ].reduce((total, value) => total + value, 0);
+        return rightScore - leftScore;
+      })[0];
+    }
+
+    return users.find((user) => {
+      const userRole = user.role;
+      const matchesRole = role ? userRole === role : true;
+      const userKey = user.username ?? user.name ?? '';
       const userPhone = normalizeWhatsappNumber(user.phone ?? '');
       const storedPassword = String(user.password ?? '').trim();
-      const normalizedDbUserKey = normalizeAuthText(userKey);
-      const matchesRole = role ? userRole === role : true;
-      const matchesUsername = canonicalUserKey === canonicalInputUsername || normalizedDbUserKey === normalizedInputText;
-      const matchesPhone = userPhone && normalizedInput && userPhone === normalizedInput;
+      const matchesUsername = normalizeLoginUsername(userKey) === canonicalInputUsername || normalizeAuthText(userKey) === normalizedInputText;
+      const matchesPhone = Boolean(userPhone && normalizedInput && userPhone === normalizedInput);
       const matchesParentCandidate = userRole === 'parent' && (matchesUsername || matchesPhone || normalizeLoginUsername(user.username || '') === canonicalInputUsername);
       const credentialsMatch = (matchesUsername || matchesPhone || matchesParentCandidate) && enteredPassword === storedPassword;
 
-      const girilenKadi = cleanedUsername;
-      const veritabanindakiKadi = userKey;
-      console.log('Giriş denemesi:', girilenKadi, veritabanindakiKadi);
-
-      if (isSuperAdminAccount && credentialsMatch) return true;
+      if (isSuperAdminRole(userRole) || isSuperAdminRole(role)) {
+        return credentialsMatch;
+      }
       return matchesRole && credentialsMatch;
     });
-
-    if (directSupabaseMatch) return directSupabaseMatch;
-
-    return undefined;
   };
 
   const login = (role, username, password) => {
@@ -5294,12 +5323,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const matchesLoginIdentity = (row, usernameValue) => {
       const candidateUsername = String(row?.username ?? '').trim();
+      const candidateEmail = String(row?.email ?? '').trim();
       const candidateName = String(row?.manager_name ?? row?.full_name ?? row?.name ?? '').trim();
+      const normalizedInput = normalizeLoginUsername(usernameValue);
 
       return (
-        normalizeLoginUsername(candidateUsername) === normalizeLoginUsername(usernameValue) ||
-        normalizeLoginUsername(candidateName) === normalizeLoginUsername(usernameValue) ||
+        normalizeLoginUsername(candidateUsername) === normalizedInput ||
+        normalizeLoginUsername(candidateEmail) === normalizedInput ||
+        normalizeLoginUsername(candidateName) === normalizedInput ||
         normalizeAuthText(candidateUsername) === normalizeAuthText(usernameValue) ||
+        normalizeAuthText(candidateEmail) === normalizeAuthText(usernameValue) ||
         normalizeAuthText(candidateName) === normalizeAuthText(usernameValue)
       );
     };
@@ -5307,7 +5340,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const applyAuthenticatedUser = (userRecord, fallbackRole = 'parent') => {
       const mappedUser = {
         id: userRecord.id,
-        name: userRecord.manager_name || userRecord.full_name || userRecord.name || cleanedUsername,
+        name: String(userRecord.manager_name || userRecord.full_name || userRecord.name || cleanedUsername).trim(),
         username: userRecord.username || cleanedUsername,
         password: userRecord.password || enteredPassword,
         role: userRecord.role || fallbackRole,
@@ -5470,11 +5503,28 @@ function AppClean({ initialPublicClubId = null } = {}) {
       console.log('3. Profiles tablosu arama sonucu:', profileData, profileError);
 
       if (!profileError && Array.isArray(profileData) && profileData.length > 0) {
-        const profileMatch = profileData.find((row) => {
+        const exactProfileMatches = profileData
+          .filter((row) => {
+            const roleName = String(row?.role ?? '').trim().toLowerCase();
+            if (roleName === 'coach') return false;
+
+            const storedPassword = String(row.password ?? '').trim();
+            const matchesIdentity = matchesLoginIdentity(row, cleanedUsername);
+            return storedPassword === enteredPassword && matchesIdentity;
+          })
+          .sort((left, right) => {
+            const leftScore = Number(normalizeLoginUsername(String(left?.username ?? '').trim()) === normalizeLoginUsername(cleanedUsername))
+              + Number(normalizeLoginUsername(String(left?.email ?? '').trim()) === normalizeLoginUsername(cleanedUsername))
+              + Number(normalizeLoginUsername(String(left?.full_name ?? left?.name ?? '').trim()) === normalizeLoginUsername(cleanedUsername));
+            const rightScore = Number(normalizeLoginUsername(String(right?.username ?? '').trim()) === normalizeLoginUsername(cleanedUsername))
+              + Number(normalizeLoginUsername(String(right?.email ?? '').trim()) === normalizeLoginUsername(cleanedUsername))
+              + Number(normalizeLoginUsername(String(right?.full_name ?? right?.name ?? '').trim()) === normalizeLoginUsername(cleanedUsername));
+            return rightScore - leftScore;
+          });
+
+        const profileMatch = exactProfileMatches[0] ?? profileData.find((row) => {
           const roleName = String(row?.role ?? '').trim().toLowerCase();
-          if (roleName === 'coach') {
-            return false;
-          }
+          if (roleName === 'coach') return false;
 
           const storedPassword = String(row.password ?? '').trim();
           const matchesIdentity = matchesLoginIdentity(row, cleanedUsername);
