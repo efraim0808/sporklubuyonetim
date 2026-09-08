@@ -1073,8 +1073,6 @@ function getCurrentParentStudentMatches(currentUser, clubsList = []) {
     .map((value) => String(value ?? '').trim())
     .filter(Boolean);
 
-  const parentPhone = normalizeWhatsappNumber(currentUser.phone || '');
-  const parentName = normalizeDuplicateText(String(currentUser.name || currentUser.full_name || '').trim());
   const childStudentIds = [
     currentUser.childStudentId,
     currentUser.child_student_id,
@@ -1082,20 +1080,19 @@ function getCurrentParentStudentMatches(currentUser, clubsList = []) {
     .map((value) => String(value ?? '').trim())
     .filter(Boolean);
 
+  if (!parentProfileIds.length && !childStudentIds.length) {
+    return [];
+  }
+
   return clubsList
     .flatMap((club) => (club?.students ?? []))
     .filter((student) => {
       const studentId = String(student?.id ?? '').trim();
       const studentParentId = String(student?.parentId ?? student?.parent_id ?? '').trim();
-      const studentParentPhone = normalizeWhatsappNumber(student?.parentPhone ?? student?.parent_phone ?? '');
-      const studentParentName = normalizeDuplicateText(String(student?.parentName ?? student?.parent_name ?? '').trim());
-
-      const matchesParentId = parentProfileIds.some((profileId) => profileId && (profileId === studentParentId || profileId === String(student?.parentId ?? student?.parent_id ?? '').trim()));
+      const matchesParentId = parentProfileIds.some((profileId) => profileId && profileId === studentParentId);
       const matchesChildStudent = childStudentIds.includes(studentId);
-      const matchesPhone = Boolean(parentPhone && studentParentPhone && parentPhone === studentParentPhone);
-      const matchesName = Boolean(parentName && studentParentName && parentName === studentParentName);
 
-      return matchesParentId || matchesChildStudent || matchesPhone || matchesName;
+      return matchesParentId || matchesChildStudent;
     });
 }
 
@@ -4952,16 +4949,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
       .map((value) => String(value ?? '').trim())
       .filter(Boolean);
 
-    const parentProfilePhone = normalizeWhatsappNumber(currentUser?.phone || '');
-    const parentProfileName = String(currentUser?.name || currentUser?.full_name || '').trim();
     const parentChildStudentIds = [
       currentUser?.childStudentId,
       currentUser?.child_student_id,
       ...users
-        .filter((user) => user?.role === 'parent' && (
+        .filter((user) => String(user?.role ?? '').trim().toLowerCase() === 'parent' && (
           String(user?.id ?? '').trim() === String(currentUser?.id ?? '').trim() ||
           String(user?.parentId ?? user?.parent_id ?? '').trim() === String(currentUser?.id ?? '').trim() ||
-          String(user?.profileId ?? user?.profile_id ?? '').trim() === String(currentUser?.id ?? '').trim()
+          String(user?.profileId ?? user?.profile_id ?? '').trim() === String(currentUser?.id ?? '').trim() ||
+          normalizeLoginUsername(String(user?.username ?? '')) === normalizeLoginUsername(String(currentUser?.username ?? '')) ||
+          String(user?.email ?? '').trim().toLowerCase() === String(currentUser?.email ?? '').trim().toLowerCase()
         ))
         .map((user) => user?.childStudentId ?? user?.child_student_id)
         .filter(Boolean),
@@ -4971,20 +4968,13 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const parentScopedStudents = (activeParentClub?.students ?? []).filter((student) => {
       const studentId = String(student?.id ?? '').trim();
-      const studentParentName = String(student?.parentName ?? student?.parent_name ?? '').trim();
-      const studentParentPhone = normalizeWhatsappNumber(student?.parentPhone ?? student?.parent_phone ?? '');
       const studentParentId = String(student?.parentId ?? student?.parent_id ?? '').trim();
 
       if (isPlainParentSession) {
-        const matchedByParentId = parentProfileIds.some((parentId) => {
-          if (!parentId) return false;
-          return parentId === studentParentId || parentId === String(student?.parentId ?? student?.parent_id ?? '').trim();
-        });
+        const matchedByParentId = parentProfileIds.some((parentId) => parentId && parentId === studentParentId);
         const matchedByChildStudentId = parentChildStudentIds.includes(studentId);
-        const matchedByPhone = Boolean(parentProfilePhone && studentParentPhone && parentProfilePhone === studentParentPhone);
-        const matchedByName = Boolean(parentProfileName && studentParentName && normalizeDuplicateText(parentProfileName) === normalizeDuplicateText(studentParentName));
 
-        return matchedByParentId || matchedByChildStudentId || matchedByPhone || matchedByName;
+        return matchedByParentId || matchedByChildStudentId;
       }
 
       return true;
@@ -5011,11 +5001,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const selectedStudent = branchStudents.find((student) => String(student.id) === String(parentFilterStudentId))
       ?? branchStudents.find((student) => String(student.id) === String(currentUser?.childStudentId))
       ?? branchStudents[0]
-      ?? (effectiveParentStudents ?? []).find((student) => String(student.id) === String(currentUser?.childStudentId))
-      ?? (effectiveParentStudents ?? [])[0]
       ?? null;
 
-    const targetStudent = selectedStudent || (currentClub?.students ?? []).find((student) => String(student.id) === String(currentUser?.childStudentId)) || (currentClub?.students ?? [])[0] || null;
+    const targetStudent = selectedStudent || null;
     const parentNotifications = (activeParentClub?.notifications || []).filter((notification) => {
       const notificationType = String(notification?.type || '').trim().toLowerCase();
       const studentMatches = !notification.studentId || notification.studentId === targetStudent?.id;
