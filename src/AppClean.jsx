@@ -1182,6 +1182,44 @@ const CoinsIcon = () => (
   </svg>
 );
 
+const BanknoteIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3.5 8.5A2.5 2.5 0 0 1 6 6h12a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 18 18H6a2.5 2.5 0 0 1-2.5-2.5v-7Z" />
+    <path d="M8 10.5h8M8 13.5h8M12 9.5v5" />
+    <circle cx="12" cy="12" r="2" />
+  </svg>
+);
+
+const CoachIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M7 18.5V17a5 5 0 0 1 10 0v1.5" />
+    <circle cx="12" cy="9" r="3.6" />
+    <path d="M9.2 15.8c1.1.8 1.8 1.2 2.8 1.2 1.1 0 1.9-.5 2.8-1.2" />
+    <path d="M11 6.2 9.6 4.8M13 6.2l1.4-1.4" />
+    <path d="M7.5 6.5 6 8.2M16.5 6.5 18 8.2" />
+    <path d="M4.5 18.5h15" />
+  </svg>
+);
+
+const GraduationCapIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M2.5 9.5 12 5l9.5 4.5L12 14 2.5 9.5Z" />
+    <path d="M6 11.5v4.4c0 1.9 2.7 3.6 6 3.6s6-1.7 6-3.6v-4.4" />
+    <path d="M20.5 9.5V15" />
+  </svg>
+);
+
+const FileClockIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M14 3h4a2 2 0 0 1 2 2v5" />
+    <path d="M15 3v4h4" />
+    <path d="M7 5.5A2.5 2.5 0 0 1 9.5 3h4.2" />
+    <path d="M7 6.5h7.5A2.5 2.5 0 0 1 17 9v6.5A2.5 2.5 0 0 1 14.5 18H9.5A2.5 2.5 0 0 1 7 15.5V6.5Z" />
+    <circle cx="12" cy="13.5" r="3.5" />
+    <path d="M12 11.5v2l1.2 1.2" />
+  </svg>
+);
+
 const EnvelopeIcon = () => (
   <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="3" y="5" width="18" height="14" rx="2" />
@@ -1237,9 +1275,9 @@ const DownloadIcon = () => (
 const appTabIcons = {
   info: SchoolIcon,
   branches: BallIcon,
-  coaches: WhistleIcon,
-  students: ShieldIcon,
-  payments: CoinsIcon,
+  coaches: CoachIcon,
+  students: GraduationCapIcon,
+  payments: BanknoteIcon,
   messages: EnvelopeIcon,
   announcements: MegaphoneIcon,
 };
@@ -4146,10 +4184,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
             {[
               { key: 'info', label: 'Kulüp Bilgileri', icon: SchoolIcon },
               { key: 'branches', label: 'Branşlar', icon: BallIcon },
-              { key: 'coaches', label: 'Antrenörler', icon: WhistleIcon },
-              { key: 'pending', label: 'Bekleyenler', icon: ShieldIcon },
-              { key: 'students', label: 'Öğrenciler', icon: ShieldIcon },
-              { key: 'payments', label: 'Ödemeler', icon: CoinsIcon },
+              { key: 'coaches', label: 'Antrenörler', icon: CoachIcon },
+              { key: 'pending', label: 'Bekleyenler', icon: FileClockIcon },
+              { key: 'students', label: 'Öğrenciler', icon: GraduationCapIcon },
+              { key: 'payments', label: 'Ödemeler', icon: BanknoteIcon },
               { key: 'messages', label: 'Gelen Mesajlar', icon: EnvelopeIcon },
               { key: 'announcements', label: 'Duyurular', icon: MegaphoneIcon },
             ].map(({ key, label, icon: Icon }) => (
@@ -4819,9 +4857,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 </button>
               </div>
             </div>
-            <div className="overflow-x-auto rounded-2xl border border-slate-700">
-              <table className="min-w-full divide-y divide-slate-700 text-left text-sm text-slate-300">
-                <thead className="bg-slate-900/80 text-slate-300">
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-sm text-slate-700">
+                <thead className="bg-white text-slate-700">
                   <tr>
                     <th className="px-3 py-3 font-medium">Öğrenci</th>
                     <th className="px-3 py-3 font-medium">Branş</th>
@@ -4831,7 +4869,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                     <th className="px-3 py-3 font-medium">İşlem</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800 bg-slate-950/40">
+                <tbody className="divide-y divide-slate-200 bg-white">
                   {(currentClub?.students || []).filter((student) => isStudentRecordActive(student)).flatMap((student) => {
                     const studentRows = getStudentPaymentRows(currentClub, student).filter((paymentRow) => {
                       const branchMatches = reportBranchFilter === 'all' || paymentRow.branchId === reportBranchFilter;
@@ -4851,9 +4889,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
                           <td className="px-3 py-3">{paymentRow.branchName}</td>
                           <td className="w-32 max-w-[130px] px-3 py-3 align-top">
                             <select
-                              className="input-shell w-full max-w-[110px] min-w-0"
+                              className="input-shell w-32 min-w-[110px] max-w-[120px] px-2 py-1.5 text-xs leading-tight"
                               value={paymentRow.status}
                               onChange={(e) => handlePaymentStatusChange(student.id, paymentRow.branchId, e.target.value)}
+                              aria-label={`Ödeme durumu: ${student.name}`}
                             >
                               <option value="Ödendi">Ödendi</option>
                               <option value="Bekliyor">Bekliyor</option>
