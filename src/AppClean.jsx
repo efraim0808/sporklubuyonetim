@@ -1507,83 +1507,79 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ).trim();
 
       try {
-        const usernameToUse = currentUsername || currentFullName;
-        let userProfile = { full_name: currentFullName, username: currentUsername, phone: sessionUser?.phone || '' };
+        const userId = sessionUser?.id || (
+          typeof window !== 'undefined'
+            ? (() => {
+                try {
+                  const rawSession = window.localStorage.getItem(SESSION_STORAGE_KEY);
+                  const savedSession = rawSession ? JSON.parse(rawSession) : {};
+                  return String(savedSession?.currentUser?.id ?? '').trim();
+                } catch (error) {
+                  console.warn('Session user id restore failed:', error);
+                  return '';
+                }
+              })()
+            : ''
+        );
 
-        if (usernameToUse) {
+        let userProfile = {
+          id: userId,
+          full_name: currentFullName,
+          username: currentUsername,
+        };
+
+        if (userId) {
           const { data: profileRow, error: profileError } = await supabase
             .from('profiles')
-            .select('*')
-            .eq('username', usernameToUse)
+            .select('id, full_name, username')
+            .eq('id', userId)
             .single();
 
-          if (profileError) {
-            console.warn('Parent profile lookup failed for username:', usernameToUse, profileError);
-          } else if (profileRow) {
+          if (!profileError && profileRow) {
             userProfile = {
-              ...profileRow,
-              full_name: String(profileRow?.full_name ?? currentFullName ?? '').trim(),
-              username: String(profileRow?.username ?? currentUsername ?? '').trim(),
-              phone: String(profileRow?.phone ?? sessionUser?.phone ?? '').trim(),
+              ...userProfile,
+              id: profileRow.id ?? userId,
+              full_name: String(profileRow.full_name ?? currentFullName ?? '').trim(),
+              username: String(profileRow.username ?? currentUsername ?? '').trim(),
             };
           }
+        }
+
+        if (!userProfile.full_name) {
+          if (!isCancelled) {
+            setParentViewProfile(userProfile);
+            setParentViewStudents([]);
+          }
+          return;
         }
 
         if (!isCancelled) {
           setParentViewProfile(userProfile);
         }
 
-        const userFullNameForMatch = String(userProfile?.full_name ?? currentFullName ?? '').trim();
-        const userPhoneForMatch = String(userProfile?.phone ?? sessionUser?.phone ?? '').trim();
-
-        if (!userFullNameForMatch) {
-          if (!isCancelled) setParentViewStudents([]);
-          return;
-        }
-
-        const { data, error } = await supabase
+        const { data: allStudents, error: studentError } = await supabase
           .from('club_students')
-          .select('*')
-          .ilike('parent_name', `%${userFullNameForMatch.trim()}%`);
+          .select('*');
 
-        if (error) {
-          console.warn('Parent student ilike fetch failed:', error);
+        if (studentError) {
+          console.warn('Parent student fetch failed:', studentError);
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
-        if (!data || data.length === 0) {
-          if (userPhoneForMatch) {
-            const { data: phoneMatches, error: phoneError } = await supabase
-              .from('club_students')
-              .select('*')
-              .eq('parent_phone', userPhoneForMatch);
+        const normalizedUserName = userProfile.full_name.trim().toUpperCase();
+        const matchingStudents = (allStudents ?? []).filter((student) => {
+          const storedParentName = String(student?.parent_name ?? '').trim().toUpperCase();
+          return storedParentName === normalizedUserName;
+        });
 
-            if (phoneError) {
-              console.warn('Parent student phone fallback fetch failed:', phoneError);
-              if (!isCancelled) setParentViewStudents([]);
-              return;
-            }
-
-            if (!phoneMatches || phoneMatches.length === 0) {
-              console.log('Bulunamayan Veli:', userProfile);
-              if (!isCancelled) setParentViewStudents([]);
-              return;
-            }
-
-            if (!isCancelled) {
-              setParentViewStudents([phoneMatches[0]]);
-            }
-            return;
-          }
-
-          console.log('Bulunamayan Veli:', userProfile);
+        if (!matchingStudents.length) {
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
         if (!isCancelled) {
-          setParentViewStudents([data[0]]);
+          setParentViewStudents(matchingStudents);
         }
       } catch (error) {
         console.error('Parent exact fetch crashed:', error);
