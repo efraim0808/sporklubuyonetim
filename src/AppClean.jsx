@@ -4181,13 +4181,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
       : null;
 
     const [coachQrPayload, setCoachQrPayload] = useState('');
+    const [showCoachQr, setShowCoachQr] = useState(false);
     const coachQrUrl = coachQrPayload
       ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(coachQrPayload)}`
       : '';
 
-    useEffect(() => {
+    const generateCoachQr = () => {
       if (!coachClub || !selectedCoachBranchId) {
         setCoachQrPayload('');
+        setShowCoachQr(false);
         return;
       }
 
@@ -4198,8 +4200,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
         date: new Date().toISOString().slice(0, 10),
         status: 'present',
       };
+
       setCoachQrPayload(JSON.stringify(nextPayload));
-    }, [coachClub, selectedCoachBranchId]);
+      setShowCoachQr(true);
+    };
 
     const effectiveSelectedCoachId = currentUser?.role === 'coach'
       ? (selectedCoachId || currentCoachMatch?.id || currentUser.id || coachListForClub[0]?.id || '')
@@ -4340,41 +4344,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
             </div>
           </div>
 
-          {selectedCoachBranchId && (
-            <div className="mt-5 rounded-2xl border border-violet-500/30 bg-violet-500/10 p-4">
-              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="text-xs uppercase tracking-[0.2em] text-violet-200">Ders QR</div>
-                  <div className="mt-1 text-sm text-slate-200">{selectedCoachBranchId ? branchName : 'Branş'} • {new Date().toISOString().slice(0, 10)}</div>
-                </div>
-                <button
-                  type="button"
-                  className="primary-btn"
-                  onClick={() => {
-                    if (!selectedCoachBranchId || !coachClub) return;
-                    setCoachQrPayload(JSON.stringify({
-                      type: 'attendance',
-                      clubId: coachClub.id,
-                      branchId: selectedCoachBranchId,
-                      date: new Date().toISOString().slice(0, 10),
-                      status: 'present',
-                    }));
-                  }}
-                >
-                  Ders QR Oluştur
-                </button>
-              </div>
-
-              {coachQrPayload && coachQrUrl ? (
-                <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-950/60 p-4 text-center">
-                  <img src={coachQrUrl} alt="Ders katılım QR" className="h-52 w-52 rounded-xl border border-slate-700 bg-white p-2" />
-                  <div className="text-xs text-slate-300">Veliler bu QR'ı okutarak günlük katılımı işaretleyebilir.</div>
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-400">QR üretmek için branş seçimi yapın ve “Ders QR Oluştur” butonuna basın.</div>
-              )}
-            </div>
-          )}
         </div>
 
         <div className="card-surface rounded-3xl p-3">
@@ -4393,10 +4362,32 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
         {coachTab === 'attendance' && (
           <div className="card-surface rounded-3xl p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <h3 className="text-xl font-semibold text-white">Yoklama Listesi</h3>
-              <button className="secondary-btn" onClick={() => coachStudents.forEach((student) => handleAttendanceUpdate(student.id, 'present'))}>Tümünü Katıldı</button>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button className="secondary-btn" onClick={() => coachStudents.forEach((student) => handleAttendanceUpdate(student.id, 'present'))}>Tümünü Katıldı</button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={generateCoachQr}
+                  disabled={!selectedCoachBranchId || !coachClub}
+                >
+                  Ders QR Oluştur
+                </button>
+              </div>
             </div>
+
+            {selectedCoachBranchId && showCoachQr && coachQrPayload && coachQrUrl && (
+              <div className="mb-5 rounded-2xl border border-violet-500/30 bg-violet-500/10 p-4">
+                <div className="mb-3 text-xs uppercase tracking-[0.2em] text-violet-200">Ders QR</div>
+                <div className="mb-3 text-sm text-slate-200">{branchName} • {new Date().toISOString().slice(0, 10)}</div>
+                <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-950/60 p-4 text-center">
+                  <img src={coachQrUrl} alt="Ders katılım QR" className="h-52 w-52 rounded-xl border border-slate-700 bg-white p-2" />
+                  <div className="text-xs text-slate-300">Veliler bu QR'ı okutarak günlük katılımı işaretleyebilir.</div>
+                </div>
+              </div>
+            )}
 
             {coachStudents.length === 0 ? (
               <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 text-sm text-slate-400">Bu branş için atanmış öğrenci bulunmuyor.</div>
