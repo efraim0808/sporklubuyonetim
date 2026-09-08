@@ -1482,11 +1482,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
         }
 
         if (currentFullName) {
-          profileQuery = profileQuery.or(`full_name.eq.${currentFullName},username.eq.${currentUsername || currentFullName}`);
+          profileQuery = profileQuery.or(`full_name.ilike.%${currentFullName}%,username.ilike.%${currentUsername || currentFullName}%`);
         }
 
         if (currentPhone) {
-          profileQuery = profileQuery.or(`phone.eq.${currentPhone},username.eq.${currentUsername || currentFullName}`);
+          profileQuery = profileQuery.or(`phone.ilike.%${currentPhone}%,username.ilike.%${currentUsername || currentFullName}%`);
         }
 
         if (clubId) {
@@ -1530,11 +1530,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
           .eq('club_id', exactClubId);
 
         if (currentFullName) {
-          studentQuery = studentQuery.or(`parent_name.eq.${currentFullName},parent_phone.eq.${currentPhone || currentFullName}`);
+          studentQuery = studentQuery.or(`parent_name.ilike.%${currentFullName}%,parent_phone.ilike.%${currentPhone || ''}%`);
         }
 
         if (currentPhone) {
-          studentQuery = studentQuery.or(`parent_phone.eq.${currentPhone},parent_name.eq.${currentFullName || currentUsername || ''}`);
+          studentQuery = studentQuery.or(`parent_phone.ilike.%${currentPhone}%,parent_name.ilike.%${currentFullName || currentUsername || ''}%`);
         }
 
         const { data: studentRows, error: studentError } = await studentQuery.order('created_at', { ascending: false }).limit(200);
@@ -1547,9 +1547,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
         const filteredStudentRows = (studentRows ?? []).filter((student) => {
           const studentParentName = normalizeDuplicateText(String(student?.parent_name ?? student?.parentName ?? '').trim());
           const studentParentPhone = normalizeWhatsappNumber(String(student?.parent_phone ?? student?.parentPhone ?? '').trim());
-          const rowMatchesName = Boolean(currentFullName && studentParentName && studentParentName === normalizeDuplicateText(currentFullName));
+          const currentNameNormalized = normalizeDuplicateText(currentFullName);
+          const currentUsernameNormalized = normalizeLoginUsername(currentUsername);
+          const rowMatchesName = Boolean(currentFullName && studentParentName && (studentParentName.includes(currentNameNormalized) || currentNameNormalized.includes(studentParentName) || studentParentName === currentNameNormalized));
           const rowMatchesPhone = Boolean(currentPhone && studentParentPhone && studentParentPhone === currentPhone);
-          const rowMatchesUsername = Boolean(currentUsername && studentParentName && normalizeLoginUsername(currentUsername) === normalizeLoginUsername(studentParentName));
+          const rowMatchesUsername = Boolean(currentUsername && studentParentName && (normalizeLoginUsername(studentParentName) === currentUsernameNormalized || studentParentName.includes(currentUsernameNormalized) || currentUsernameNormalized.includes(studentParentName)));
           return rowMatchesName || rowMatchesPhone || rowMatchesUsername;
         });
 
