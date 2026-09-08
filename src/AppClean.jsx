@@ -1345,12 +1345,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
     }
   }, [themeMode]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    clearPersistedAuthState();
-    clearLoginForm();
-  }, []);
-
   const getClubById = (clubId) => {
     if (!clubId) return null;
     const searchId = String(clubId).trim();
