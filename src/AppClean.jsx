@@ -4825,7 +4825,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   <tr>
                     <th className="px-3 py-3 font-medium">Öğrenci</th>
                     <th className="px-3 py-3 font-medium">Branş</th>
-                    <th className="px-3 py-3 font-medium">Durum</th>
+                    <th className="w-32 max-w-[130px] px-3 py-3 font-medium">Durum</th>
                     <th className="px-3 py-3 font-medium">Tutar</th>
                     <th className="px-3 py-3 font-medium">Vade Tarihi</th>
                     <th className="px-3 py-3 font-medium">İşlem</th>
@@ -4849,9 +4849,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
                         <tr key={`${student.id}-${paymentRow.branchId}`}>
                           <td className="px-3 py-3 text-white">{student.name}</td>
                           <td className="px-3 py-3">{paymentRow.branchName}</td>
-                          <td className="px-3 py-3">
+                          <td className="w-32 max-w-[130px] px-3 py-3 align-top">
                             <select
-                              className="input-shell min-w-[150px]"
+                              className="input-shell w-full max-w-[110px] min-w-0"
                               value={paymentRow.status}
                               onChange={(e) => handlePaymentStatusChange(student.id, paymentRow.branchId, e.target.value)}
                             >
