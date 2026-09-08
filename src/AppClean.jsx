@@ -1138,6 +1138,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [reportBranchFilter, setReportBranchFilter] = useState('all');
   const [paymentMonthFilter, setPaymentMonthFilter] = useState('all');
   const [paymentYearFilter, setPaymentYearFilter] = useState('all');
+  const [studentAttendanceMonthFilter, setStudentAttendanceMonthFilter] = useState('all');
+  const [studentAttendanceYearFilter, setStudentAttendanceYearFilter] = useState('all');
   const [managerSelectedBranchId, setManagerSelectedBranchId] = useState('');
   const [managerSelectedStudentId, setManagerSelectedStudentId] = useState('');
   const [studentBranchAddValue, setStudentBranchAddValue] = useState('');
@@ -3059,6 +3061,81 @@ function AppClean({ initialPublicClubId = null } = {}) {
     setToastMessage('Mesaj silindi.');
   };
 
+  const exportStudentAttendanceSummaryReport = () => {
+    const activeReportBranchId = managerSelectedBranchId && managerSelectedBranchId !== 'all' ? managerSelectedBranchId : null;
+    const selectedMonth = studentAttendanceMonthFilter && studentAttendanceMonthFilter !== 'all' ? Number(studentAttendanceMonthFilter) : null;
+    const selectedYear = studentAttendanceYearFilter && studentAttendanceYearFilter !== 'all' ? Number(studentAttendanceYearFilter) : null;
+    const exportTargets = isSuperAdminRole(currentUser?.role)
+      ? clubs.filter((club) => Array.isArray(club.students) && club.students.length)
+      : currentClub ? [currentClub] : [];
+
+    if (!exportTargets.length) {
+      alert('İndirilecek öğrenci yoklama verisi bulunamadı.');
+      return;
+    }
+
+    const rows = [];
+    const branchLabel = activeReportBranchId
+      ? (clubs.flatMap((club) => club.branches ?? []).find((branch) => branch.id === activeReportBranchId)?.name || 'Seçili Branş')
+      : 'Tüm Branşlar';
+    const monthLabel = selectedMonth !== null ? new Intl.DateTimeFormat('tr-TR', { month: 'long' }).format(new Date(2024, selectedMonth, 1)) : 'Tüm Aylar';
+    const yearLabel = selectedYear !== null ? String(selectedYear) : 'Tüm Yıllar';
+
+    exportTargets.forEach((club) => {
+      const clubStudents = (club.students ?? []).filter((student) => !activeReportBranchId || studentMatchesBranch(student, activeReportBranchId));
+
+      clubStudents.forEach((student) => {
+        const attendanceEntries = Array.isArray(student.attendance) ? student.attendance : [];
+        const filteredEntries = attendanceEntries.filter((entry) => {
+          const entryDate = entry?.date ? new Date(`${entry.date}T00:00:00`) : null;
+          if (Number.isNaN(entryDate?.getTime?.() ?? NaN)) return true;
+          const entryMonth = entryDate.getMonth();
+          const entryYear = entryDate.getFullYear();
+          if (selectedMonth !== null && entryMonth !== selectedMonth) return false;
+          if (selectedYear !== null && entryYear !== selectedYear) return false;
+          return true;
+        });
+
+        const presentCount = filteredEntries.filter((entry) => String(entry?.status ?? '').toLowerCase() === 'present').length;
+        const absentCount = filteredEntries.filter((entry) => String(entry?.status ?? '').toLowerCase() === 'absent').length;
+        const excusedCount = filteredEntries.filter((entry) => String(entry?.status ?? '').toLowerCase() === 'excused').length;
+        const totalCount = filteredEntries.length;
+        const attendanceRate = totalCount ? Number(((presentCount / totalCount) * 100).toFixed(2)) : 0;
+
+        if (!filteredEntries.length) return;
+
+        rows.push({
+          Kulup: club.name || 'Kulüp',
+          Branş: (club.branches ?? []).find((branch) => getStudentBranchIds(student).includes(branch.id))?.name || 'Branş Yok',
+          Ogrenci: student.name || student.full_name || 'Öğrenci',
+          Veli: student.parentName || 'Belirtilmemiş',
+          Telefon: student.parentPhone || 'Yok',
+          ToplamDers: totalCount,
+          Katildi: presentCount,
+          Devamsiz: absentCount,
+          Izinli: excusedCount,
+          KatilimYuzdesi: attendanceRate,
+          Ay: monthLabel,
+          Yil: yearLabel,
+        });
+      });
+    });
+
+    if (!rows.length) {
+      alert('Seçilen branş, ay ve yıl için öğrenci yoklama verisi bulunamadı.');
+      return;
+    }
+
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Ogrenci_Yoklama');
+
+    const sanitizedBranchLabel = String(branchLabel || 'tum-branslar').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+    const sanitizedFilterLabel = `${selectedMonth !== null ? monthLabel : 'tum-ay'}-${selectedYear !== null ? yearLabel : 'tum-yil'}`.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+    const fileName = `${(isSuperAdminRole(currentUser?.role) ? 'super-admin' : (currentClub?.name || 'kulup')).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}-${sanitizedBranchLabel}-${sanitizedFilterLabel}-yoklama-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+  };
+
   const exportStudentAttendanceAndPaymentReport = () => {
     const activeReportBranchId = reportBranchFilter && reportBranchFilter !== 'all' ? reportBranchFilter : null;
     const selectedMonth = paymentMonthFilter && paymentMonthFilter !== 'all' ? Number(paymentMonthFilter) : null;
@@ -3175,6 +3252,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const canExportExcelReport = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager';
+  const canAccessStudentAttendanceExport = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager';
   const availableReportBranches = useMemo(() => {
     const sourceClubs = isSuperAdminRole(currentUser?.role) ? clubs : currentClub ? [currentClub] : [];
     const branchMap = new Map();
@@ -3194,47 +3272,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
           <h2 className="text-2xl font-bold text-white">Süper Admin Paneli</h2>
           <span className="status-pill bg-violet-500/15 text-violet-300">Platform Sahibi</span>
         </div>
-        {canExportExcelReport && (
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <select
-              className="input-shell min-w-[180px]"
-              value={reportBranchFilter}
-              onChange={(event) => setReportBranchFilter(event.target.value)}
-            >
-              <option value="all">Tüm Branşlar</option>
-              {availableReportBranches.map((branch, branchIndex) => (
-                <option key={`${branch.id ?? 'report-branch'}-${branchIndex}`} value={branch.id}>{branch.name}</option>
-              ))}
-            </select>
-            <select
-              className="input-shell min-w-[140px]"
-              value={paymentMonthFilter}
-              onChange={(event) => setPaymentMonthFilter(event.target.value)}
-            >
-              <option value="all">Tüm Aylar</option>
-              {Array.from({ length: 12 }, (_, index) => (
-                <option key={`month-${index}`} value={String(index)}>{new Intl.DateTimeFormat('tr-TR', { month: 'long' }).format(new Date(2024, index, 1))}</option>
-              ))}
-            </select>
-            <select
-              className="input-shell min-w-[120px]"
-              value={paymentYearFilter}
-              onChange={(event) => setPaymentYearFilter(event.target.value)}
-            >
-              <option value="all">Tüm Yıllar</option>
-              {Array.from(new Set([...clubs.flatMap((club) => (club.payments ?? []).map((payment) => getPaymentYearValue(payment)).filter(Boolean))].sort((a, b) => b - a))).map((year) => (
-                <option key={`year-${year}`} value={String(year)}>{year}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
-              onClick={exportStudentAttendanceAndPaymentReport}
-            >
-              📥 Excel Raporu İndir
-            </button>
-          </div>
-        )}
         <div className="flex flex-wrap gap-2">
           {['statistics', 'clubs', 'newClub'].map((tab) => (
             <button
@@ -4009,21 +4046,50 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
         {managerTab === 'students' && (
           <div className="card-surface rounded-3xl p-4 sm:p-6">
-            <h3 className="mb-4 text-xl font-semibold text-white">Öğrenci Takibi</h3>
+            <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+              <h3 className="text-xl font-semibold text-white">Öğrenci Takibi</h3>
+              {canAccessStudentAttendanceExport && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <select className="input-shell min-w-[150px]" value={managerSelectedBranchId} onChange={(e) => { setManagerSelectedBranchId(e.target.value); setManagerSelectedStudentId(''); }}>
+                    <option value="">Tüm Branşlar</option>
+                    {availableManagerBranches.map((branch, branchIndex) => (
+                      <option key={`${branch.id ?? 'branch-manager'}-${branchIndex}`} value={branch.id}>{branch.name}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="input-shell min-w-[140px]"
+                    value={studentAttendanceMonthFilter}
+                    onChange={(event) => setStudentAttendanceMonthFilter(event.target.value)}
+                  >
+                    <option value="all">Tüm Aylar</option>
+                    {Array.from({ length: 12 }, (_, index) => (
+                      <option key={`attendance-month-${index}`} value={String(index)}>{new Intl.DateTimeFormat('tr-TR', { month: 'long' }).format(new Date(2024, index, 1))}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="input-shell min-w-[120px]"
+                    value={studentAttendanceYearFilter}
+                    onChange={(event) => setStudentAttendanceYearFilter(event.target.value)}
+                  >
+                    <option value="all">Tüm Yıllar</option>
+                    {Array.from(new Set((currentClub?.students ?? []).flatMap((student) => (student.attendance ?? []).map((attendanceItem) => new Date(`${attendanceItem.date}T00:00:00`).getFullYear()).filter(Boolean)).sort((a, b) => b - a))).map((year) => (
+                      <option key={`attendance-year-${year}`} value={String(year)}>{year}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+                    onClick={exportStudentAttendanceSummaryReport}
+                  >
+                    📥 Excel Raporu İndir
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="mb-4 grid gap-3 md:grid-cols-2">
               <div>
-                <label className="mb-2 block text-xs uppercase tracking-[0.2em] text-slate-400">Branş</label>
-                <select className="input-shell w-full" value={managerSelectedBranchId} onChange={(e) => { setManagerSelectedBranchId(e.target.value); setManagerSelectedStudentId(''); }}>
-                  <option value="">Branş seçin</option>
-                  {availableManagerBranches.map((branch, branchIndex) => (
-                    <option key={`${branch.id ?? 'branch-manager'}-${branchIndex}`} value={branch.id}>{branch.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
                 <label className="mb-2 block text-xs uppercase tracking-[0.2em] text-slate-400">Öğrenci</label>
-                <select className="input-shell w-full" value={managerSelectedStudentId} onChange={(e) => setManagerSelectedStudentId(e.target.value)} disabled={!managerSelectedBranchId}>
+                <select className="input-shell w-full" value={managerSelectedStudentId} onChange={(e) => setManagerSelectedStudentId(e.target.value)} disabled={!managerSelectedBranchId && !availableManagerBranches.length}>
                   <option value="">Öğrenci seçin</option>
                   {branchStudents.map((student, studentIndex) => (
                     <option key={`${student.id ?? student.name ?? 'student'}-${studentIndex}`} value={student.id}>{getStudentDisplayLabel(student)}</option>
@@ -4104,8 +4170,30 @@ function AppClean({ initialPublicClubId = null } = {}) {
                           </button>
                         </div>
 
-                        <div className="mb-3 flex justify-end">
-                          <button className="secondary-btn" onClick={() => openWhatsAppWithMessage(selectedManagerStudent.parentPhone || '', buildAttendanceWarningWhatsAppMessage(selectedManagerStudent.name, branch?.name ?? 'Branş', currentClub?.name || 'Kulübümüz'))}>WhatsApp ile Gönder</button>
+                        <div className="mb-3 flex justify-end gap-2">
+                          <button
+                            className="secondary-btn"
+                            onClick={() => openWhatsAppMessageEditor(
+                              selectedManagerStudent,
+                              buildAttendanceWarningWhatsAppMessage(selectedManagerStudent.name, branch?.name ?? 'Branş', currentClub?.name || 'Kulübümüz'),
+                              { phone: selectedManagerStudent.parentPhone || currentClub?.whatsappNumber || '' }
+                            )}
+                          >
+                            WhatsApp ile Gönder
+                          </button>
+                          <button
+                            type="button"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600 bg-slate-900/70 text-base text-violet-200 transition hover:border-violet-400 hover:text-white"
+                            title="Mesajı Düzenle"
+                            aria-label="WhatsApp mesajını düzenle"
+                            onClick={() => openWhatsAppMessageEditor(
+                              selectedManagerStudent,
+                              buildAttendanceWarningWhatsAppMessage(selectedManagerStudent.name, branch?.name ?? 'Branş', currentClub?.name || 'Kulübümüz'),
+                              { phone: selectedManagerStudent.parentPhone || currentClub?.whatsappNumber || '' }
+                            )}
+                          >
+                            ✎
+                          </button>
                         </div>
 
                         <div className="rounded-xl border border-slate-700 bg-slate-900/70 p-2">
@@ -5621,15 +5709,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
     </div>
   );
 
-  const openWhatsAppMessageEditor = (student, paymentAmount, branchName) => {
-    const phoneNumber = student?.parentPhone || currentClub?.whatsappNumber || '';
-    const messageText = buildPaymentReminderWhatsAppMessage(student?.name || 'Öğrenci', paymentAmount, currentClub?.name || 'Kulübümüz');
+  const openWhatsAppMessageEditor = (student, messageText, options = {}) => {
+    const resolvedPhone = options.phone ?? student?.parentPhone ?? currentClub?.whatsappNumber ?? '';
+    const resolvedStudentName = options.studentName ?? student?.name ?? 'Öğrenci';
+    const resolvedText = messageText ?? '';
 
     setWhatsappEditState({
       open: true,
-      phone: phoneNumber,
-      studentName: student?.name || 'Öğrenci',
-      text: messageText,
+      phone: resolvedPhone,
+      studentName: resolvedStudentName,
+      text: resolvedText,
     });
   };
 
