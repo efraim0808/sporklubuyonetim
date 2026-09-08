@@ -1080,7 +1080,10 @@ function getCurrentParentStudentMatches(currentUser, clubsList = []) {
     .map((value) => String(value ?? '').trim())
     .filter(Boolean);
 
-  if (!parentProfileIds.length && !childStudentIds.length) {
+  const directParentName = normalizeDuplicateText(String(currentUser.name || currentUser.full_name || '').trim());
+  const directParentUsername = normalizeLoginUsername(String(currentUser.username || '').trim());
+
+  if (!parentProfileIds.length && !childStudentIds.length && !directParentName && !directParentUsername) {
     return [];
   }
 
@@ -1089,10 +1092,13 @@ function getCurrentParentStudentMatches(currentUser, clubsList = []) {
     .filter((student) => {
       const studentId = String(student?.id ?? '').trim();
       const studentParentId = String(student?.parentId ?? student?.parent_id ?? '').trim();
+      const studentParentName = normalizeDuplicateText(String(student?.parentName ?? student?.parent_name ?? '').trim());
       const matchesParentId = parentProfileIds.some((profileId) => profileId && profileId === studentParentId);
       const matchesChildStudent = childStudentIds.includes(studentId);
+      const matchesDirectName = Boolean(directParentName && studentParentName && directParentName === studentParentName);
+      const matchesDirectUsername = Boolean(directParentUsername && studentParentName && directParentUsername === normalizeLoginUsername(studentParentName));
 
-      return matchesParentId || matchesChildStudent;
+      return matchesParentId || matchesChildStudent || matchesDirectName || matchesDirectUsername;
     });
 }
 
@@ -5490,7 +5496,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
         return;
       }
 
-      const { data: profileData, error: profileError } = await supabase.from('profiles').select('*');
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('username', cleanedUsername)
+        .limit(20);
       console.log('3. Profiles tablosu arama sonucu:', profileData, profileError);
 
       if (!profileError && Array.isArray(profileData) && profileData.length > 0) {
@@ -5525,6 +5535,20 @@ function AppClean({ initialPublicClubId = null } = {}) {
         console.log('Profiles tablosunda eşleşen kullanıcı:', profileMatch);
 
         if (profileMatch) {
+          const parentFullName = String(profileMatch.full_name || profileMatch.name || '').trim();
+          const parentClubId = normalizeDbClubId(profileMatch.club_id) || profileMatch.club_id || null;
+
+          if (parentFullName && parentClubId && supabase?.from) {
+            const { data: parentStudentsData, error: parentStudentsError } = await supabase
+              .from('club_students')
+              .select('*')
+              .eq('club_id', parentClubId)
+              .eq('parent_name', parentFullName)
+              .order('created_at', { ascending: false });
+
+            console.log('Parent student exact match result:', parentStudentsData, parentStudentsError);
+          }
+
           const mappedUser = applyAuthenticatedUser({
             ...profileMatch,
             role: profileMatch.role || 'parent',
