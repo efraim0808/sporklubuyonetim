@@ -1015,7 +1015,10 @@ function buildPaymentReminderNotificationText(studentName, amount, branchName, c
 function isStudentRecordActive(student) {
   const normalizedStatus = String(student?.status ?? '').trim().toLowerCase();
   if (!normalizedStatus) return true;
-  return !['passive', 'pasif', 'inactive', 'inaktif', 'disabled', 'deactive', 'deaktif'].includes(normalizedStatus);
+
+  // Pasif öğrenciler listeden tamamen kaldırılmasın; sadece pasif etiketli görünümde kalsınlar.
+  // Sadece gerçek silme/soft-delete benzeri durumlar görünümden çıkarılsın.
+  return !['deleted', 'silindi', 'removed', 'kaldirildi'].includes(normalizedStatus);
 }
 
 function getStudentPaymentRows(club, student) {
