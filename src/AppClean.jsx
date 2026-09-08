@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import jsqr from 'jsqr';
 import { supabase } from './lib/supabase';
 
 const packageOptions = [1, 3, 6, 12];
@@ -922,6 +923,90 @@ function buildAttendanceWarningWhatsAppMessage(studentName, branchName, clubName
   return `Merhaba, ${clubName} kulübünde ${studentName} öğrencisinin ${branchName} branşı için devamsızlık uyarısı bulunmaktadır. Lütfen antrenman takvimi ve yoklama durumu ile ilgili bilgi alalım.`;
 }
 
+function normalizeAttendanceStatus(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+
+  if (['present', 'katildi', '1', 'true', 'yes'].includes(normalized)) return 'present';
+  if (['absent', 'devamsiz', '0', 'false', 'no'].includes(normalized)) return 'absent';
+  if (['excused', 'izinli', 'mazeret'].includes(normalized)) return 'excused';
+
+  return 'pending';
+}
+
+function buildAttendanceEntry(dateKey, status) {
+  const normalizedStatus = normalizeAttendanceStatus(status);
+  const numericValue = normalizedStatus === 'present' ? 1 : normalizedStatus === 'absent' ? 0 : normalizedStatus === 'excused' ? 0.5 : null;
+
+  return {
+    date: dateKey,
+    status: normalizedStatus,
+    ...(numericValue !== null ? { value: numericValue } : {}),
+  };
+}
+
+function parseAttendanceQrPayload(rawValue) {
+  if (!rawValue) return null;
+
+  const candidate = String(rawValue).trim();
+  if (!candidate) return null;
+
+  try {
+    const parsed = JSON.parse(candidate);
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
+    }
+  } catch (error) {
+    // Ignore JSON parse errors and fall back to plain text parsing.
+  }
+
+  const keyValuePattern = /([a-zA-Z_]+)\s*[:=]\s*([^&|;]+)/g;
+  const kvEntries = [...candidate.matchAll(keyValuePattern)];
+  if (kvEntries.length) {
+    const objectEntry = {};
+    kvEntries.forEach(([_, key, value]) => {
+      const normalizedKey = String(key).trim();
+      if (!normalizedKey) return;
+      objectEntry[normalizedKey] = String(value).trim();
+    });
+    if (Object.keys(objectEntry).length) {
+      return objectEntry;
+    }
+  }
+
+  const delimiterVariants = ['|', ';'];
+  for (const delimiter of delimiterVariants) {
+    const parts = candidate
+      .split(delimiter)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (parts.length >= 5 && (parts[0].toLowerCase().includes('sporkul') || parts[0].toLowerCase().includes('attendance') || parts[0].toLowerCase().includes('katilim'))) {
+      return {
+        type: 'attendance',
+        clubId: parts[1] || '',
+        studentId: parts[2] || '',
+        branchId: parts[3] || '',
+        date: parts[4] || '',
+        status: parts[5] || 'present',
+      };
+    }
+  }
+
+  const normalized = candidate.toLowerCase();
+  if (normalized.includes('studentid') && normalized.includes('clubid')) {
+    const kvEntriesFromQuery = new URLSearchParams(candidate.replace(/\s+/g, ''));
+    const collection = {};
+    kvEntriesFromQuery.forEach((value, key) => {
+      collection[key] = value;
+    });
+    if (Object.keys(collection).length) {
+      return collection;
+    }
+  }
+
+  return null;
+}
+
 function getCalendarMonthCells(monthKey) {
   const [year, month] = monthKey.split('-').map(Number);
   const firstDay = new Date(year, month - 1, 1);
@@ -1009,6 +1094,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return urlSearchParams.get('club');
   });
   const [publicClubDetails, setPublicClubDetails] = useState(null);
+  const [qrScannerState, setQrScannerState] = useState({
+    open: false,
+    error: '',
+    fallbackStudentId: '',
+    fallbackClubId: '',
+    fallbackBranchId: '',
+  });
+  const qrVideoRef = useRef(null);
+  const qrCanvasRef = useRef(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -2474,14 +2568,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
       .flatMap((club) => club.students ?? [])
       .find((student) => String(student.id) === String(studentId));
 
+    const normalizedStatus = normalizeAttendanceStatus(status);
     const currentAttendance = Array.isArray(studentRecord?.attendance) ? studentRecord.attendance : [];
     const nextAttendance = [...currentAttendance];
     const existingIndex = nextAttendance.findIndex((entry) => entry.date === today);
+    const attendanceEntry = buildAttendanceEntry(today, normalizedStatus);
 
     if (existingIndex >= 0) {
-      nextAttendance[existingIndex] = { ...nextAttendance[existingIndex], status };
+      nextAttendance[existingIndex] = { ...nextAttendance[existingIndex], ...attendanceEntry };
     } else {
-      nextAttendance.push({ date: today, status });
+      nextAttendance.push(attendanceEntry);
     }
 
     setClubs((prev) =>
@@ -4338,6 +4434,210 @@ function AppClean({ initialPublicClubId = null } = {}) {
     );
   };
 
+  const processAttendanceScanPayload = async (rawValue, fallbackStudentId = '', fallbackClubId = '', fallbackBranchId = '') => {
+    const parsed = parseAttendanceQrPayload(rawValue);
+    if (!parsed || typeof parsed !== 'object') {
+      return { ok: false, reason: 'QR içeriği okunamadı. Lütfen geçerli bir ders/egzersiz kodu okutunuz.' };
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const payloadStudentId = String(parsed.studentId || parsed.student_id || parsed.id || fallbackStudentId || '').trim();
+    const payloadClubId = String(parsed.clubId || parsed.club_id || fallbackClubId || currentUser?.clubId || selectedClubId || '').trim();
+    const payloadBranchId = String(parsed.branchId || parsed.branch_id || fallbackBranchId || '').trim();
+    const payloadDate = String(parsed.date || parsed.lessonDate || parsed.sessionDate || parsed.day || '').slice(0, 10);
+    const payloadStatus = parsed.status || parsed.attendance || parsed.value || 'present';
+
+    if (payloadDate && payloadDate !== today) {
+      return { ok: false, reason: 'QR kod bugünkü ders/egzersizle eşleşmiyor.' };
+    }
+
+    if (!payloadStudentId) {
+      return { ok: false, reason: 'QR kodunda öğrenci kimliği bulunamadı.' };
+    }
+
+    const matchedStudent = clubs
+      .flatMap((club) => club.students ?? [])
+      .find((student) => String(student.id) === payloadStudentId || String(student.id).toLowerCase() === payloadStudentId.toLowerCase());
+
+    if (!matchedStudent) {
+      return { ok: false, reason: 'QR kodu ile eşleşen öğrenci bulunamadı.' };
+    }
+
+    if (payloadClubId) {
+      const studentClubId = matchedStudent.clubId || matchedStudent.club_id || clubs.find((club) => (club.students ?? []).some((student) => String(student.id) === String(matchedStudent.id)))?.id || '';
+      if (studentClubId && String(studentClubId) !== payloadClubId) {
+        return { ok: false, reason: 'QR kodu bu kulüple eşleşmiyor.' };
+      }
+    }
+
+    if (payloadBranchId) {
+      const branchMatches = getStudentBranchIds(matchedStudent).includes(payloadBranchId) || (matchedStudent.branchId && String(matchedStudent.branchId) === payloadBranchId) || (matchedStudent.branch_id && String(matchedStudent.branch_id) === payloadBranchId);
+      if (!branchMatches) {
+        return { ok: false, reason: 'QR kodu bu branşla eşleşmiyor.' };
+      }
+    }
+
+    const nextStatus = normalizeAttendanceStatus(payloadStatus);
+    if (nextStatus === 'pending') {
+      return { ok: false, reason: 'QR kodu katılım için uygun değil.' };
+    }
+
+    await handleAttendanceUpdate(payloadStudentId, nextStatus);
+
+    return {
+      ok: true,
+      status: nextStatus,
+      studentName: matchedStudent.name || matchedStudent.full_name || 'Öğrenci',
+    };
+  };
+
+  useEffect(() => {
+    if (!qrScannerState.open) return undefined;
+
+    let active = true;
+    let stream = null;
+    let rafId = null;
+
+    const stopStream = () => {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
+
+    const startScan = async () => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setQrScannerState((prev) => ({ ...prev, error: 'Bu cihazda kamera erişimi desteklenmiyor.' }));
+        return;
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+
+        if (!active || !qrVideoRef.current) return;
+
+        qrVideoRef.current.srcObject = stream;
+        await qrVideoRef.current.play();
+
+        const scanFrame = () => {
+          if (!active || !qrVideoRef.current || !qrCanvasRef.current) return;
+
+          const video = qrVideoRef.current;
+          const canvas = qrCanvasRef.current;
+          const context = canvas.getContext('2d');
+
+          if (video.readyState >= 2) {
+            canvas.width = video.videoWidth || 640;
+            canvas.height = video.videoHeight || 480;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsqr(imageData.data, canvas.width, canvas.height);
+
+            if (code) {
+              const rawValue = code.data;
+              void processAttendanceScanPayload(
+                rawValue,
+                qrScannerState.fallbackStudentId,
+                qrScannerState.fallbackClubId,
+                qrScannerState.fallbackBranchId
+              ).then((result) => {
+                if (!active) return;
+
+                if (result.ok) {
+                  setToastMessage(`${result.studentName || 'Öğrenci'} için bugün katılım kaydedildi.`);
+                  setQrScannerState({
+                    open: false,
+                    error: '',
+                    fallbackStudentId: '',
+                    fallbackClubId: '',
+                    fallbackBranchId: '',
+                  });
+                  return;
+                }
+
+                setQrScannerState((prev) => ({ ...prev, error: result.reason || 'QR kod okunamadı.' }));
+              });
+
+              return;
+            }
+          }
+
+          rafId = window.requestAnimationFrame(scanFrame);
+        };
+
+        rafId = window.requestAnimationFrame(scanFrame);
+      } catch (error) {
+        console.error('QR camera open failed:', error);
+        setQrScannerState((prev) => ({ ...prev, error: 'Kamera açılamadı. Lütfen izin verin veya tekrar deneyin.' }));
+      }
+    };
+
+    void startScan();
+
+    return () => {
+      active = false;
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+      }
+      stopStream();
+      if (qrVideoRef.current) {
+        qrVideoRef.current.srcObject = null;
+      }
+    };
+  }, [qrScannerState.open, qrScannerState.fallbackStudentId, qrScannerState.fallbackClubId, qrScannerState.fallbackBranchId]);
+
+  const renderQrScannerModal = () => (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div className="card-surface w-full max-w-xl overflow-hidden rounded-[28px] border border-slate-700">
+        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-violet-300">QR ile giriş</p>
+            <h3 className="text-xl font-bold text-white">Ders / Antrenman Katılımı</h3>
+          </div>
+          <button className="text-2xl text-slate-300 hover:text-white" onClick={() => setQrScannerState((prev) => ({ ...prev, open: false, error: '' }))}>×</button>
+        </div>
+
+        <div className="space-y-4 px-5 py-5">
+          <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/80">
+            <video ref={qrVideoRef} className="h-72 w-full object-cover" playsInline muted autoPlay />
+            <canvas ref={qrCanvasRef} className="hidden" />
+          </div>
+
+          {qrScannerState.error && (
+            <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+              {qrScannerState.error}
+            </div>
+          )}
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <input
+              className="input-shell"
+              placeholder="Öğrenci ID (opsiyonel)"
+              value={qrScannerState.fallbackStudentId}
+              onChange={(event) => setQrScannerState((prev) => ({ ...prev, fallbackStudentId: event.target.value }))}
+            />
+            <input
+              className="input-shell"
+              placeholder="Kulüp ID (opsiyonel)"
+              value={qrScannerState.fallbackClubId}
+              onChange={(event) => setQrScannerState((prev) => ({ ...prev, fallbackClubId: event.target.value }))}
+            />
+          </div>
+
+          <input
+            className="input-shell w-full"
+            placeholder="Branş ID (opsiyonel)"
+            value={qrScannerState.fallbackBranchId}
+            onChange={(event) => setQrScannerState((prev) => ({ ...prev, fallbackBranchId: event.target.value }))}
+          />
+        </div>
+      </div>
+    </div>
+  );
+
   const renderParentPanel = () => {
     const adminFilterEnabled = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager' || activeRole === 'club-manager' || activeRole === 'super-admin' || activeRole === 'super_admin';
 
@@ -4355,7 +4655,55 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ? parentFilterBranchId
       : (branchOptions[0]?.id ?? '');
 
-    const branchStudents = dedupeById((activeParentClub?.students ?? []).filter((student) => {
+    const parentProfileIds = [
+      currentUser?.parentId,
+      currentUser?.parent_id,
+      currentUser?.profileId,
+      currentUser?.profile_id,
+      currentUser?.id,
+    ]
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean);
+
+    const parentProfilePhone = normalizeWhatsappNumber(currentUser?.phone || '');
+    const parentProfileName = String(currentUser?.name || currentUser?.full_name || '').trim();
+    const parentChildStudentIds = [
+      currentUser?.childStudentId,
+      currentUser?.child_student_id,
+      ...users
+        .filter((user) => user?.role === 'parent' && (
+          String(user?.id ?? '').trim() === String(currentUser?.id ?? '').trim() ||
+          String(user?.parentId ?? user?.parent_id ?? '').trim() === String(currentUser?.id ?? '').trim() ||
+          String(user?.profileId ?? user?.profile_id ?? '').trim() === String(currentUser?.id ?? '').trim()
+        ))
+        .map((user) => user?.childStudentId ?? user?.child_student_id)
+        .filter(Boolean),
+    ]
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean);
+
+    const parentScopedStudents = (activeParentClub?.students ?? []).filter((student) => {
+      const studentId = String(student?.id ?? '').trim();
+      const studentParentName = String(student?.parentName ?? student?.parent_name ?? '').trim();
+      const studentParentPhone = normalizeWhatsappNumber(student?.parentPhone ?? student?.parent_phone ?? '');
+      const studentParentId = String(student?.parentId ?? student?.parent_id ?? '').trim();
+
+      if (currentUser?.role === 'parent' || currentUser?.role === 'veli' || activeRole === 'parent' || activeRole === 'veli') {
+        const matchedByParentId = parentProfileIds.some((parentId) => {
+          if (!parentId) return false;
+          return parentId === studentParentId || parentId === String(student?.parentId ?? student?.parent_id ?? '').trim();
+        });
+        const matchedByChildStudentId = parentChildStudentIds.includes(studentId);
+        const matchedByPhone = Boolean(parentProfilePhone && studentParentPhone && parentProfilePhone === studentParentPhone);
+        const matchedByName = Boolean(parentProfileName && studentParentName && normalizeDuplicateText(parentProfileName) === normalizeDuplicateText(studentParentName));
+
+        return matchedByParentId || matchedByChildStudentId || matchedByPhone || matchedByName;
+      }
+
+      return true;
+    });
+
+    const branchStudents = dedupeById((parentScopedStudents ?? []).filter((student) => {
       if (!effectiveBranchId) return true;
       return studentMatchesBranch(student, effectiveBranchId);
     }), (student) => student.id || `${student.name || student.full_name || ''}|${student.parentPhone || student.parent_phone || ''}`);
@@ -4363,8 +4711,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const selectedStudent = branchStudents.find((student) => student.id === parentFilterStudentId)
       ?? branchStudents.find((student) => student.id === currentUser?.childStudentId)
       ?? branchStudents[0]
-      ?? (activeParentClub?.students ?? []).find((student) => student.id === currentUser?.childStudentId)
-      ?? (activeParentClub?.students ?? [])[0]
+      ?? (parentScopedStudents ?? []).find((student) => student.id === currentUser?.childStudentId)
+      ?? (parentScopedStudents ?? [])[0]
       ?? null;
 
     const targetStudent = selectedStudent || currentClub?.students.find((student) => student.id === currentUser?.childStudentId) || currentClub?.students[0] || null;
@@ -4398,7 +4746,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <p className="text-sm text-slate-400">Veli / Üye</p>
               <h2 className="text-2xl font-bold text-white">{parentHeaderName}</h2>
             </div>
-            <div className="rounded-xl border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-sm text-orange-200">Kullanıcı: {parentHeaderUsername}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={() => setQrScannerState((prev) => ({ ...prev, open: true, error: '' }))}
+              >
+                📷 QR ile Giriş
+              </button>
+              <div className="rounded-xl border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-sm text-orange-200">Kullanıcı: {parentHeaderUsername}</div>
+            </div>
           </div>
 
           {adminFilterEnabled && (
@@ -5911,6 +6268,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       {showAttendanceSummaryModal && renderAttendanceSummaryModal()}
       {showStudentDetailModal && renderStudentDetailModal()}
       {showKvkkModal && renderKvkkModal()}
+      {qrScannerState.open && renderQrScannerModal()}
       {whatsappEditState.open && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
           <div className="card-surface w-full max-w-xl overflow-hidden rounded-[28px] border border-slate-700">
