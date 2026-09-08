@@ -1139,6 +1139,111 @@ function getCalendarMonthCells(monthKey) {
   return cells;
 }
 
+const appIconClassName = 'h-5 w-5 shrink-0';
+
+const SchoolIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 10.5 12 5l9 5.5-9 5.5-9-5.5Z" />
+    <path d="M7.5 12.4V17c0 1.7 2 3 4.5 3s4.5-1.3 4.5-3v-4.6" />
+    <path d="M21 10.5v7" />
+  </svg>
+);
+
+const BallIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 4c1.8 2.2 2.7 4.7 2.7 8s-.9 5.8-2.7 8c-1.8-2.2-2.7-4.7-2.7-8s.9-5.8 2.7-8Z" />
+    <path d="M4 12h16M12 4v16" />
+  </svg>
+);
+
+const WhistleIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M8 9.5V6.5A2.5 2.5 0 0 1 10.5 4h2A2.5 2.5 0 0 1 15 6.5v3" />
+    <path d="M7 12h5.7l1.8 7H8.5a2.5 2.5 0 0 1-2.5-2.5V12.5A2.5 2.5 0 0 1 8.5 10H9" />
+    <path d="M18.5 8.5 21 9.5v4l-2.5 1" />
+    <path d="M15 9.5h2.5" />
+  </svg>
+);
+
+const ShieldIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 3.5 18.5 6v5.8c0 4.2-2.7 7.1-6.5 9.7-3.8-2.6-6.5-5.5-6.5-9.7V6L12 3.5Z" />
+    <path d="M9.5 12.2 11 13.8l3.5-4.2" />
+  </svg>
+);
+
+const CoinsIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="9" cy="9" r="4" />
+    <circle cx="15.5" cy="14.5" r="4.5" />
+    <path d="M5.8 15.5c0 1.7 1.6 3 3.5 3h4.2" />
+    <path d="M17 7.5c1.5 0 2.8 1.2 2.8 2.8" />
+  </svg>
+);
+
+const EnvelopeIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="m4 7 8 6 8-6" />
+  </svg>
+);
+
+const MegaphoneIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 12h2l9-5v10l-9-5H4Z" />
+    <path d="M6 14v4a2 2 0 0 0 2 2h1" />
+    <path d="M18 9.5a3.5 3.5 0 0 1 0 5" />
+  </svg>
+);
+
+const WhatsappIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M20 11.7A8.2 8.2 0 1 1 9.7 4a6.5 6.5 0 0 1 10.3 7.7Z" />
+    <path d="M15.5 14.4c-.3.8-1.6 1.4-2.3 1.4-1.7 0-3.5-1-4.6-2.3-.9-1.1-1.2-2.7-.8-4.1.2-.7 1-1.4 1.7-1.7.3-.1.7 0 .9.3l.5.9c.1.2 0 .5-.2.7l-.5.6c-.2.2-.2.5 0 .8.6.9 1.4 1.7 2.3 2.3.3.2.6.2.8 0l.7-.5c.2-.2.5-.3.7-.2l.9.4c.3.2.4.6.3.9Z" />
+  </svg>
+);
+
+const PencilIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z" />
+    <path d="m13.5 5.5 5 5" />
+  </svg>
+);
+
+const BellIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M15 17h5l-1.2-1.3A2.6 2.6 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2c0 .7-.2 1.3-.7 1.8L4 17h5" />
+    <path d="M10 20a2 2 0 0 0 4 0" />
+  </svg>
+);
+
+const ExcelIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M14 3.5h4.5A1.5 1.5 0 0 1 20 5v14a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 6 19V8l5-4.5Z" />
+    <path d="M11 3.5V8h5" />
+    <path d="M8.5 12.5h7M8.5 16h7M9 10.5h6" />
+  </svg>
+);
+
+const DownloadIcon = () => (
+  <svg viewBox="0 0 24 24" className={appIconClassName} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 4v10" />
+    <path d="m8 20 4 4 4-4" />
+    <path d="M4 18v1.5A1.5 1.5 0 0 0 5.5 21h13A1.5 1.5 0 0 0 20 19.5V18" />
+  </svg>
+);
+
+const appTabIcons = {
+  info: SchoolIcon,
+  branches: BallIcon,
+  coaches: WhistleIcon,
+  students: ShieldIcon,
+  payments: CoinsIcon,
+  messages: EnvelopeIcon,
+  announcements: MegaphoneIcon,
+};
+
 function AppClean({ initialPublicClubId = null } = {}) {
   const urlSearchParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const forcedPublicClubId = urlSearchParams.get('club') || initialPublicClubId || null;
@@ -3663,13 +3768,19 @@ function AppClean({ initialPublicClubId = null } = {}) {
           <span className="status-pill bg-violet-500/15 text-violet-300">Platform Sahibi</span>
         </div>
         <div className="flex flex-wrap gap-2">
-          {['statistics', 'clubs', 'newClub'].map((tab) => (
+          {[
+            { key: 'statistics', label: 'İstatistikler', icon: CoinsIcon },
+            { key: 'clubs', label: 'Kulüp Listesi', icon: SchoolIcon },
+            { key: 'newClub', label: 'Yeni Kulüp Kaydet', icon: MegaphoneIcon },
+          ].map(({ key, label, icon: Icon }) => (
             <button
-              key={tab}
-              className={`rounded-xl px-4 py-2 text-sm font-medium ${superAdminTab === tab ? 'bg-violet-600 text-white' : 'bg-slate-900 text-slate-300'}`}
-              onClick={() => setSuperAdminTab(tab)}
+              key={key}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium ${superAdminTab === key ? 'bg-violet-600 text-white' : 'bg-slate-900 text-slate-300'}`}
+              onClick={() => setSuperAdminTab(key)}
+              title={label}
             >
-              {tab === 'statistics' ? 'İstatistikler' : tab === 'clubs' ? 'Kulüp Listesi' : 'Yeni Kulüp Kaydet'}
+              <Icon />
+              <span className="hidden sm:inline">{label}</span>
             </button>
           ))}
         </div>
@@ -4032,13 +4143,24 @@ function AppClean({ initialPublicClubId = null } = {}) {
       <div className="space-y-6">
         <div className="card-surface rounded-3xl p-3 sm:p-4">
           <div className="flex flex-wrap gap-2">
-            {['info', 'branches', 'coaches', 'pending', 'students', 'payments', 'messages', 'announcements'].map((tab) => (
+            {[
+              { key: 'info', label: 'Kulüp Bilgileri', icon: SchoolIcon },
+              { key: 'branches', label: 'Branşlar', icon: BallIcon },
+              { key: 'coaches', label: 'Antrenörler', icon: WhistleIcon },
+              { key: 'pending', label: 'Bekleyenler', icon: ShieldIcon },
+              { key: 'students', label: 'Öğrenciler', icon: ShieldIcon },
+              { key: 'payments', label: 'Ödemeler', icon: CoinsIcon },
+              { key: 'messages', label: 'Gelen Mesajlar', icon: EnvelopeIcon },
+              { key: 'announcements', label: 'Duyurular', icon: MegaphoneIcon },
+            ].map(({ key, label, icon: Icon }) => (
               <button
-                key={tab}
-                className={`rounded-xl px-3 py-2 text-xs font-semibold sm:text-sm ${managerTab === tab ? 'bg-gradient-to-r from-violet-600 to-orange-500 text-white' : 'bg-slate-950/80 text-slate-300'}`}
-                onClick={() => setManagerTab(tab)}
+                key={key}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold sm:text-sm ${managerTab === key ? 'bg-gradient-to-r from-violet-600 to-orange-500 text-white' : 'bg-slate-950/80 text-slate-300'}`}
+                onClick={() => setManagerTab(key)}
+                title={label}
               >
-                {tab === 'info' ? 'Kulüp Bilgileri' : tab === 'branches' ? 'Branşlar' : tab === 'coaches' ? 'Antrenörler' : tab === 'pending' ? 'Bekleyenler' : tab === 'students' ? 'Öğrenciler' : tab === 'payments' ? 'Ödemeler' : tab === 'messages' ? 'Gelen Mesajlar' : 'Duyurular'}
+                <Icon />
+                <span className="hidden sm:inline">{label}</span>
               </button>
             ))}
           </div>
@@ -4502,10 +4624,13 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   </select>
                   <button
                     type="button"
-                    className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+                    className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
                     onClick={exportStudentAttendanceSummaryReport}
+                    title="Excel Raporu İndir"
+                    aria-label="Excel Raporu İndir"
                   >
-                    📥 Excel Raporu İndir
+                    <ExcelIcon />
+                    <span className="hidden sm:inline">Excel</span>
                   </button>
                 </div>
               )}
@@ -4684,10 +4809,13 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 </select>
                 <button
                   type="button"
-                  className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
                   onClick={exportStudentAttendanceAndPaymentReport}
+                  title="Excel Raporu İndir"
+                  aria-label="Excel Raporu İndir"
                 >
-                  📥 Excel Raporu İndir
+                  <ExcelIcon />
+                  <span className="hidden sm:inline">Excel</span>
                 </button>
               </div>
             </div>
@@ -4742,30 +4870,34 @@ function AppClean({ initialPublicClubId = null } = {}) {
                               {!isPaid && (
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                   <button
-                                    className="secondary-btn"
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-200 transition hover:bg-emerald-500/20"
                                     onClick={() =>
                                       openWhatsAppWithMessage(
                                         student.parentPhone || currentClub?.whatsappNumber || '',
                                         buildPaymentReminderWhatsAppMessage(student.name, paymentRow.amount, currentClub?.name || 'Kulübümüz')
                                       )
                                     }
+                                    title="WhatsApp Hatırlat"
+                                    aria-label="WhatsApp Hatırlat"
                                   >
-                                    WhatsApp Hatırlat
+                                    <WhatsappIcon />
                                   </button>
                                   <button
                                     type="button"
-                                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600 bg-slate-900/70 text-base text-violet-200 transition hover:border-violet-400 hover:text-white"
-                                    title="Mesajı Düzenle"
-                                    aria-label="WhatsApp mesajını düzenle"
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-600 bg-slate-900/70 text-slate-200 transition hover:border-violet-400 hover:text-white"
+                                    title="Düzenle"
+                                    aria-label="Düzenle"
                                     onClick={() => openWhatsAppMessageEditor(student, paymentRow.amount, paymentRow.branchName)}
                                   >
-                                    ✎
+                                    <PencilIcon />
                                   </button>
                                   <button
-                                    className="secondary-btn"
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-200 transition hover:bg-amber-500/20"
                                     onClick={() => sendPaymentReminderNotification(student, paymentRow.amount, paymentRow.branchName)}
+                                    title="Uygulama İçi Bildir"
+                                    aria-label="Uygulama İçi Bildir"
                                   >
-                                    Uygulama İçi Bildir
+                                    <BellIcon />
                                   </button>
                                 </div>
                               )}
