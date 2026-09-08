@@ -4668,6 +4668,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const clubNameForCoach = coachClub?.name || getClubById(currentUser?.clubId)?.name || 'Kulüp';
     const branchName = String(selectedCoach?.branchName || selectedCoach?.branch_name || currentUser?.branchName || currentUser?.branch_name || selectedCoachBranch?.name || 'Branş').trim() || 'Branş';
     const coachDisplayName = `${selectedCoach?.name || activeDisplayUser?.name || currentUser?.name || 'Antrenör'} - ${clubNameForCoach} (${branchName})`;
+    const showCoachSelectionFilters = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager';
     const presentCount = allCoachStudents.filter((student) => (student.attendance ?? []).some((entry) => entry.date === todayIso && entry.status === 'present')).length;
     const pendingCount = allCoachStudents.filter((student) => !(student.attendance ?? []).some((entry) => entry.date === todayIso)).length;
     const coachTabs = [
@@ -4690,52 +4691,54 @@ function AppClean({ initialPublicClubId = null } = {}) {
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-2">
-            <label className="space-y-2">
-              <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Kulüp Seç</span>
-              <select
-                className="input-shell"
-                value={effectiveCoachClubId}
-                onChange={(event) => {
-                  const nextClubId = event.target.value;
-                  setCoachViewClubId(nextClubId);
-                  setSelectedCoachId('');
-                }}
-              >
-                <option value="">Kulüp Seç</option>
-                {coachClubOptions.map((club, clubIndex) => (
-                  <option key={`${club.id ?? 'coach-club-option'}-${clubIndex}`} value={club.id}>{club.name}</option>
-                ))}
-              </select>
-            </label>
+          {showCoachSelectionFilters && (
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              <label className="space-y-2">
+                <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Kulüp Seç</span>
+                <select
+                  className="input-shell"
+                  value={effectiveCoachClubId}
+                  onChange={(event) => {
+                    const nextClubId = event.target.value;
+                    setCoachViewClubId(nextClubId);
+                    setSelectedCoachId('');
+                  }}
+                >
+                  <option value="">Kulüp Seç</option>
+                  {coachClubOptions.map((club, clubIndex) => (
+                    <option key={`${club.id ?? 'coach-club-option'}-${clubIndex}`} value={club.id}>{club.name}</option>
+                  ))}
+                </select>
+              </label>
 
-            <label className="space-y-2">
-              <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Antrenör Seç</span>
-              <select
-                className="input-shell"
-                value={effectiveSelectedCoachId || ''}
-                onChange={(event) => {
-                  const nextCoachId = event.target.value;
-                  setSelectedCoachId(nextCoachId);
-                  if (nextCoachId) {
-                    setCoachViewClubId(effectiveCoachClubId);
-                  }
-                }}
-                disabled={!effectiveCoachClubId || coachListForClub.length === 0}
-              >
-                <option value="">Antrenör Seç</option>
-                {coachListForClub.map((coachUser, coachIndex) => (
-                  <option key={`${coachUser.id ?? 'coach-user-option'}-${coachIndex}`} value={coachUser.id}>{coachUser.name}</option>
-                ))}
-              </select>
-            </label>
-          </div>
+              <label className="space-y-2">
+                <span className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Antrenör Seç</span>
+                <select
+                  className="input-shell"
+                  value={effectiveSelectedCoachId || ''}
+                  onChange={(event) => {
+                    const nextCoachId = event.target.value;
+                    setSelectedCoachId(nextCoachId);
+                    if (nextCoachId) {
+                      setCoachViewClubId(effectiveCoachClubId);
+                    }
+                  }}
+                  disabled={!effectiveCoachClubId || coachListForClub.length === 0}
+                >
+                  <option value="">Antrenör Seç</option>
+                  {coachListForClub.map((coachUser, coachIndex) => (
+                    <option key={`${coachUser.id ?? 'coach-user-option'}-${coachIndex}`} value={coachUser.id}>{coachUser.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
 
-          {!effectiveCoachClubId && (
+          {showCoachSelectionFilters && !effectiveCoachClubId && (
             <div className="mt-5 rounded-2xl border border-dashed border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-400">Kulüp seçimi yaparak ilgili antrenör ve öğrenci verilerini görüntüleyebilirsiniz.</div>
           )}
 
-          {effectiveCoachClubId && !coachListForClub.length && (
+          {showCoachSelectionFilters && effectiveCoachClubId && !coachListForClub.length && (
             <div className="mt-5 rounded-2xl border border-dashed border-slate-700 bg-slate-900/60 p-4 text-sm text-amber-300">Seçilen kulüpte kayıtlı antrenör bulunmuyor.</div>
           )}
 
