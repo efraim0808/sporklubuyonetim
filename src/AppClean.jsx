@@ -1485,88 +1485,78 @@ function AppClean({ initialPublicClubId = null } = {}) {
     let isCancelled = false;
 
     const loadParentExactMatches = async () => {
-      const currentUsername = String(sessionUser.username || '').trim();
-      const currentFullName = String(sessionUser.full_name || sessionUser.name || '').trim();
-      const currentPhone = String(sessionUser.phone || '').trim();
-      const clubId = sessionUser.clubId ? normalizeDbClubId(sessionUser.clubId) : null;
+      const currentUsername = String(
+        sessionUser?.username ?? (
+          typeof window !== 'undefined'
+            ? (() => {
+                try {
+                  const rawSession = window.localStorage.getItem(SESSION_STORAGE_KEY);
+                  const savedSession = rawSession ? JSON.parse(rawSession) : {};
+                  return String(savedSession?.currentUser?.username ?? '').trim();
+                } catch (error) {
+                  console.warn('Session username restore failed:', error);
+                  return '';
+                }
+              })()
+            : ''
+        )
+      ).trim();
 
       try {
-        const profileLookup = supabase
+        if (!currentUsername) {
+          if (!isCancelled) {
+            setParentViewProfile(null);
+            setParentViewStudents([]);
+          }
+          return;
+        }
+
+        const { data: profileRow, error: profileError } = await supabase
           .from('profiles')
           .select('*')
-          .eq('role', 'parent')
-          .limit(50);
+          .eq('username', currentUsername)
+          .single();
 
-        const profileSearch = currentUsername || currentFullName || currentPhone
-          ? await profileLookup
-              .or(
-                `username.ilike.%${currentUsername || currentFullName}%,full_name.ilike.%${currentFullName}%,phone.eq.${currentPhone}`
-              )
-          : await profileLookup;
-
-        const parentProfileRows = profileSearch?.data ?? [];
-        const exactProfile = parentProfileRows.find((row) => {
-          const rowUsername = normalizeLoginUsername(String(row?.username ?? '').trim());
-          const rowFullName = normalizeDuplicateText(String(row?.full_name ?? row?.name ?? '').trim());
-          const rowPhone = String(row?.phone ?? '').trim();
-          return (
-            (currentUsername && rowUsername === normalizeLoginUsername(currentUsername)) ||
-            (currentFullName && rowFullName === normalizeDuplicateText(currentFullName)) ||
-            (currentPhone && rowPhone === currentPhone)
-          );
-        }) ?? null;
-
-        const profile = exactProfile || {
-          full_name: currentFullName,
-          phone: currentPhone,
-          username: currentUsername,
-          club_id: sessionUser.clubId || clubId,
-        };
-
-        if (!isCancelled) {
-          setParentViewProfile(profile);
+        if (profileError || !profileRow) {
+          console.warn('Parent profile lookup failed for username:', currentUsername, profileError);
+          if (!isCancelled) {
+            setParentViewProfile(null);
+            setParentViewStudents([]);
+          }
+          return;
         }
 
-        if (!profile.full_name && !profile.phone) {
+        const userProfile = profileRow;
+        const userFullName = String(userProfile?.full_name ?? '').trim();
+
+        if (!isCancelled) {
+          setParentViewProfile(userProfile);
+        }
+
+        if (!userFullName) {
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
-        const exactClubId = normalizeDbClubId((profile?.club_id) || clubId || sessionUser.clubId || '');
-
-        const studentQuery = supabase
+        const { data, error } = await supabase
           .from('club_students')
-          .select('*');
+          .select('*')
+          .eq('parent_name', userFullName);
 
-        let studentRequest = studentQuery;
-        if (exactClubId) {
-          studentRequest = studentRequest.eq('club_id', exactClubId);
-        }
-
-        const parentMatchFilter = profile.phone
-          ? `parent_name.ilike.%${profile.full_name}%,parent_phone.eq.${profile.phone}`
-          : `parent_name.ilike.%${profile.full_name}%`;
-
-        studentRequest = studentRequest.or(parentMatchFilter);
-
-        const { data: studentRows, error: studentError } = await studentRequest
-          .order('created_at', { ascending: false })
-          .limit(200);
-
-        if (studentError) {
-          console.warn('Parent student exact fetch failed:', studentError);
+        if (error) {
+          console.warn('Parent student exact fetch failed:', error);
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
-        if (!studentRows || studentRows.length === 0) {
-          console.log('Bulunamayan Veli:', profile);
+        if (!data || data.length === 0) {
+          console.log('Bulunamayan Veli:', userProfile);
           if (!isCancelled) setParentViewStudents([]);
           return;
         }
 
         if (!isCancelled) {
-          setParentViewStudents(studentRows ?? []);
+          setParentViewStudents(data);
         }
       } catch (error) {
         console.error('Parent exact fetch crashed:', error);
