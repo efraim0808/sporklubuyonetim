@@ -1007,6 +1007,45 @@ function parseAttendanceQrPayload(rawValue) {
   return null;
 }
 
+function getCurrentParentStudentMatches(currentUser, clubsList = []) {
+  if (!currentUser || !Array.isArray(clubsList)) return [];
+
+  const parentProfileIds = [
+    currentUser.parentId,
+    currentUser.parent_id,
+    currentUser.profileId,
+    currentUser.profile_id,
+    currentUser.id,
+  ]
+    .map((value) => String(value ?? '').trim())
+    .filter(Boolean);
+
+  const parentPhone = normalizeWhatsappNumber(currentUser.phone || '');
+  const parentName = normalizeDuplicateText(String(currentUser.name || currentUser.full_name || '').trim());
+  const childStudentIds = [
+    currentUser.childStudentId,
+    currentUser.child_student_id,
+  ]
+    .map((value) => String(value ?? '').trim())
+    .filter(Boolean);
+
+  return clubsList
+    .flatMap((club) => (club?.students ?? []))
+    .filter((student) => {
+      const studentId = String(student?.id ?? '').trim();
+      const studentParentId = String(student?.parentId ?? student?.parent_id ?? '').trim();
+      const studentParentPhone = normalizeWhatsappNumber(student?.parentPhone ?? student?.parent_phone ?? '');
+      const studentParentName = normalizeDuplicateText(String(student?.parentName ?? student?.parent_name ?? '').trim());
+
+      const matchesParentId = parentProfileIds.some((profileId) => profileId && (profileId === studentParentId || profileId === String(student?.parentId ?? student?.parent_id ?? '').trim()));
+      const matchesChildStudent = childStudentIds.includes(studentId);
+      const matchesPhone = Boolean(parentPhone && studentParentPhone && parentPhone === studentParentPhone);
+      const matchesName = Boolean(parentName && studentParentName && parentName === studentParentName);
+
+      return matchesParentId || matchesChildStudent || matchesPhone || matchesName;
+    });
+}
+
 function getCalendarMonthCells(monthKey) {
   const [year, month] = monthKey.split('-').map(Number);
   const firstDay = new Date(year, month - 1, 1);
@@ -4141,6 +4180,27 @@ function AppClean({ initialPublicClubId = null } = {}) {
         }
       : null;
 
+    const [coachQrPayload, setCoachQrPayload] = useState('');
+    const coachQrUrl = coachQrPayload
+      ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(coachQrPayload)}`
+      : '';
+
+    useEffect(() => {
+      if (!coachClub || !selectedCoachBranchId) {
+        setCoachQrPayload('');
+        return;
+      }
+
+      const nextPayload = {
+        type: 'attendance',
+        clubId: coachClub.id,
+        branchId: selectedCoachBranchId,
+        date: new Date().toISOString().slice(0, 10),
+        status: 'present',
+      };
+      setCoachQrPayload(JSON.stringify(nextPayload));
+    }, [coachClub, selectedCoachBranchId]);
+
     const effectiveSelectedCoachId = currentUser?.role === 'coach'
       ? (selectedCoachId || currentCoachMatch?.id || currentUser.id || coachListForClub[0]?.id || '')
       : (selectedCoachId || coachListForClub[0]?.id || '');
@@ -4279,6 +4339,42 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <div className="text-sm text-violet-300">{branchName} aktif</div>
             </div>
           </div>
+
+          {selectedCoachBranchId && (
+            <div className="mt-5 rounded-2xl border border-violet-500/30 bg-violet-500/10 p-4">
+              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.2em] text-violet-200">Ders QR</div>
+                  <div className="mt-1 text-sm text-slate-200">{selectedCoachBranchId ? branchName : 'Branş'} • {new Date().toISOString().slice(0, 10)}</div>
+                </div>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => {
+                    if (!selectedCoachBranchId || !coachClub) return;
+                    setCoachQrPayload(JSON.stringify({
+                      type: 'attendance',
+                      clubId: coachClub.id,
+                      branchId: selectedCoachBranchId,
+                      date: new Date().toISOString().slice(0, 10),
+                      status: 'present',
+                    }));
+                  }}
+                >
+                  Ders QR Oluştur
+                </button>
+              </div>
+
+              {coachQrPayload && coachQrUrl ? (
+                <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-950/60 p-4 text-center">
+                  <img src={coachQrUrl} alt="Ders katılım QR" className="h-52 w-52 rounded-xl border border-slate-700 bg-white p-2" />
+                  <div className="text-xs text-slate-300">Veliler bu QR'ı okutarak günlük katılımı işaretleyebilir.</div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-400">QR üretmek için branş seçimi yapın ve “Ders QR Oluştur” butonuna basın.</div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="card-surface rounded-3xl p-3">
@@ -4451,17 +4547,34 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return { ok: false, reason: 'QR kod bugünkü ders/egzersizle eşleşmiyor.' };
     }
 
-    if (!payloadStudentId) {
-      return { ok: false, reason: 'QR kodunda öğrenci kimliği bulunamadı.' };
+    let matchedStudent = null;
+    if (payloadStudentId) {
+      matchedStudent = clubs
+        .flatMap((club) => club.students ?? [])
+        .find((student) => String(student.id) === payloadStudentId || String(student.id).toLowerCase() === payloadStudentId.toLowerCase());
     }
 
-    const matchedStudent = clubs
-      .flatMap((club) => club.students ?? [])
-      .find((student) => String(student.id) === payloadStudentId || String(student.id).toLowerCase() === payloadStudentId.toLowerCase());
+    if (!matchedStudent && (currentUser?.role === 'parent' || currentUser?.role === 'veli' || activeRole === 'parent' || activeRole === 'veli')) {
+      const parentMatches = getCurrentParentStudentMatches(currentUser, clubs);
+      matchedStudent = parentMatches.find((student) => {
+        if (payloadClubId) {
+          const clubId = student.clubId || clubs.find((club) => (club.students ?? []).some((item) => String(item.id) === String(student.id)))?.id || '';
+          if (clubId && String(clubId) !== payloadClubId) return false;
+        }
+        if (payloadBranchId) {
+          return getStudentBranchIds(student).includes(payloadBranchId)
+            || (student.branchId && String(student.branchId) === payloadBranchId)
+            || (student.branch_id && String(student.branch_id) === payloadBranchId);
+        }
+        return true;
+      }) ?? parentMatches[0] ?? null;
+    }
 
     if (!matchedStudent) {
       return { ok: false, reason: 'QR kodu ile eşleşen öğrenci bulunamadı.' };
     }
+
+    const resolvedStudentId = String(matchedStudent.id).trim();
 
     if (payloadClubId) {
       const studentClubId = matchedStudent.clubId || matchedStudent.club_id || clubs.find((club) => (club.students ?? []).some((student) => String(student.id) === String(matchedStudent.id)))?.id || '';
@@ -4482,7 +4595,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return { ok: false, reason: 'QR kodu katılım için uygun değil.' };
     }
 
-    await handleAttendanceUpdate(payloadStudentId, nextStatus);
+    await handleAttendanceUpdate(resolvedStudentId, nextStatus);
 
     return {
       ok: true,
@@ -4645,9 +4758,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
       ? clubs
       : (currentUser?.clubId ? clubs.filter((club) => club.id === currentUser.clubId) : clubs);
 
+    const fallbackParentClubId = (() => {
+      if (currentUser?.clubId) return currentUser.clubId;
+      const matchedClub = clubs.find((club) => getCurrentParentStudentMatches(currentUser, [club]).length > 0);
+      return matchedClub?.id || '';
+    })();
+
     const resolvedParentClubId = adminFilterEnabled
-      ? (parentFilterClubId || selectedClubId || currentUser?.clubId || availableClubOptions[0]?.id || '')
-      : (currentUser?.clubId || selectedClubId || currentClub?.id || availableClubOptions[0]?.id || '');
+      ? (parentFilterClubId || selectedClubId || fallbackParentClubId || currentUser?.clubId || availableClubOptions[0]?.id || '')
+      : (fallbackParentClubId || currentUser?.clubId || selectedClubId || currentClub?.id || availableClubOptions[0]?.id || '');
 
     const activeParentClub = clubs.find((club) => club.id === resolvedParentClubId) ?? currentClub ?? availableClubOptions[0] ?? null;
     const branchOptions = activeParentClub?.branches ?? [];
@@ -4703,19 +4822,32 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return true;
     });
 
-    const branchStudents = dedupeById((parentScopedStudents ?? []).filter((student) => {
+    const allParentClubStudents = currentUser?.role === 'parent' || currentUser?.role === 'veli' || activeRole === 'parent' || activeRole === 'veli'
+      ? getCurrentParentStudentMatches(currentUser, clubs)
+      : (activeParentClub?.students ?? []);
+
+    const effectiveParentStudents = dedupeById(
+      (allParentClubStudents ?? []).filter((student) => {
+        if (!resolvedParentClubId) return true;
+        const studentClubId = student?.clubId || clubs.find((club) => (club.students ?? []).some((item) => String(item.id) === String(student.id)))?.id || '';
+        return !studentClubId || studentClubId === resolvedParentClubId;
+      }),
+      (student) => String(student?.id ?? '') || `${student?.name || student?.full_name || ''}|${student?.parentPhone || student?.parent_phone || ''}`
+    );
+
+    const branchStudents = dedupeById((effectiveParentStudents ?? []).filter((student) => {
       if (!effectiveBranchId) return true;
       return studentMatchesBranch(student, effectiveBranchId);
-    }), (student) => student.id || `${student.name || student.full_name || ''}|${student.parentPhone || student.parent_phone || ''}`);
+    }), (student) => String(student?.id ?? '') || `${student?.name || student?.full_name || ''}|${student?.parentPhone || student?.parent_phone || ''}`);
 
-    const selectedStudent = branchStudents.find((student) => student.id === parentFilterStudentId)
-      ?? branchStudents.find((student) => student.id === currentUser?.childStudentId)
+    const selectedStudent = branchStudents.find((student) => String(student.id) === String(parentFilterStudentId))
+      ?? branchStudents.find((student) => String(student.id) === String(currentUser?.childStudentId))
       ?? branchStudents[0]
-      ?? (parentScopedStudents ?? []).find((student) => student.id === currentUser?.childStudentId)
-      ?? (parentScopedStudents ?? [])[0]
+      ?? (effectiveParentStudents ?? []).find((student) => String(student.id) === String(currentUser?.childStudentId))
+      ?? (effectiveParentStudents ?? [])[0]
       ?? null;
 
-    const targetStudent = selectedStudent || currentClub?.students.find((student) => student.id === currentUser?.childStudentId) || currentClub?.students[0] || null;
+    const targetStudent = selectedStudent || (currentClub?.students ?? []).find((student) => String(student.id) === String(currentUser?.childStudentId)) || (currentClub?.students ?? [])[0] || null;
     const parentNotifications = (activeParentClub?.notifications || []).filter((notification) => {
       const notificationType = String(notification?.type || '').trim().toLowerCase();
       const studentMatches = !notification.studentId || notification.studentId === targetStudent?.id;
