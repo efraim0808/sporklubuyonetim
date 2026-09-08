@@ -1047,13 +1047,15 @@ function normalizeAttendanceStatus(value) {
   return 'pending';
 }
 
-function buildAttendanceEntry(dateKey, status) {
+function buildAttendanceEntry(dateKey, status, branchId = '') {
   const normalizedStatus = normalizeAttendanceStatus(status);
   const numericValue = normalizedStatus === 'present' ? 1 : normalizedStatus === 'absent' ? 0 : normalizedStatus === 'excused' ? 0.5 : null;
+  const resolvedBranchId = String(branchId ?? '').trim();
 
   return {
     date: dateKey,
     status: normalizedStatus,
+    ...(resolvedBranchId ? { branchId: resolvedBranchId, branch_id: resolvedBranchId } : {}),
     ...(numericValue !== null ? { value: numericValue } : {}),
   };
 }
@@ -2647,7 +2649,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
     );
   };
 
-  const handleAttendanceUpdate = async (studentId, status) => {
+  const handleAttendanceUpdate = async (studentId, status, branchIdOverride = '') => {
     if (!studentId) return;
 
     const today = new Date().toISOString().slice(0, 10);
@@ -2655,14 +2657,28 @@ function AppClean({ initialPublicClubId = null } = {}) {
       .flatMap((club) => club.students ?? [])
       .find((student) => String(student.id) === String(studentId));
 
+    const resolvedBranchId = String(branchIdOverride || studentRecord?.branchId || studentRecord?.branch_id || '').trim();
     const normalizedStatus = normalizeAttendanceStatus(status);
     const currentAttendance = Array.isArray(studentRecord?.attendance) ? studentRecord.attendance : [];
     const nextAttendance = [...currentAttendance];
-    const existingIndex = nextAttendance.findIndex((entry) => entry.date === today);
-    const attendanceEntry = buildAttendanceEntry(today, normalizedStatus);
+    const existingIndex = nextAttendance.findIndex((entry) => {
+      const sameDate = entry.date === today;
+      if (!sameDate) return false;
+      if (!resolvedBranchId) return true;
+      const entryBranchId = String(entry.branchId ?? entry.branch_id ?? '').trim();
+      return !entryBranchId || entryBranchId === resolvedBranchId;
+    });
+    const existingEntry = existingIndex >= 0 ? nextAttendance[existingIndex] : null;
+
+    if (existingEntry && normalizedStatus === 'present' && String(existingEntry.status ?? '').toLowerCase() === 'present') {
+      setToastMessage('Bugün bu ders için katılımınız zaten kaydedildi.');
+      return;
+    }
+
+    const attendanceEntry = buildAttendanceEntry(today, normalizedStatus, resolvedBranchId);
 
     if (existingIndex >= 0) {
-      nextAttendance[existingIndex] = { ...nextAttendance[existingIndex], ...attendanceEntry };
+      nextAttendance[existingIndex] = { ...existingEntry, ...attendanceEntry };
     } else {
       nextAttendance.push(attendanceEntry);
     }
@@ -2677,7 +2693,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
       }))
     );
 
+    const successMessage = 'İşleminiz gerçekleşmiştir, derse katılımınız sisteme kaydedildi.';
+
     if (!supabase || !supabase.from) {
+      setToastMessage(successMessage);
       return;
     }
 
@@ -2691,7 +2710,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
       if (error) {
         console.error('Supabase attendance update failed:', error);
         setToastMessage('Yoklama kaydı güncellenemedi.');
+        return;
       }
+
+      setToastMessage(successMessage);
     } catch (error) {
       console.error('Attendance update crashed:', error);
       setToastMessage('Yoklama kaydı sırasında hata oluştu.');
@@ -5000,7 +5022,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 <button
                   type="button"
                   className="primary-btn"
-                  onClick={() => handleAttendanceUpdate(targetStudent.id, 'present')}
+                  onClick={() => handleAttendanceUpdate(targetStudent.id, 'present', effectiveBranchId || targetStudent.branchId || targetStudent.branch_id || '')}
                 >
                   Derse Katıldım
                 </button>
@@ -6562,7 +6584,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
         </div>
       )}
       {toastMessage && (
-        <div className="fixed right-5 top-5 z-[60] rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-3 text-sm font-medium text-emerald-200 shadow-lg shadow-emerald-500/20">
+        <div className="fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-5 py-3 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-500/20 backdrop-blur-sm">
           {toastMessage}
         </div>
       )}
