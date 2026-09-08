@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import jsqr from 'jsqr';
 import * as XLSX from 'xlsx';
 import { supabase } from './lib/supabase';
 
@@ -888,6 +887,92 @@ function normalizePaymentStatus(rawStatus, dueDate) {
   return 'Bekliyor';
 }
 
+function getPaymentReferenceDate(payment) {
+  if (!payment || typeof payment !== 'object') return null;
+
+  const candidateValues = [
+    payment.dueDate,
+    payment.due_date,
+    payment.created_at,
+    payment.createdAt,
+    payment.paidAt,
+    payment.month,
+    payment.month_label,
+    payment.monthLabel,
+  ];
+
+  for (const value of candidateValues) {
+    if (!value) continue;
+    const text = String(value).trim();
+    if (!text) continue;
+
+    const parsed = new Date(text.includes('T') ? text : `${text}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+
+    const monthMatch = text.match(/[A-Za-zÇçĞğİiÖöŞşÜü]+\s+(\d{4})|\b(\d{4})\b/);
+    if (monthMatch) {
+      const year = Number((monthMatch[1] ?? monthMatch[2]) || 0);
+      if (year) {
+        const monthName = text.split(' ')[0]?.toLowerCase() ?? '';
+        const monthMap = {
+          ocak: 0, 'şubat': 1, subat: 1, mart: 2, nisan: 3, mayıs: 4, mayis: 4, haziran: 5, temmuz: 6, agustos: 7, ağustos: 7, eylul: 8, eylül: 8, ekim: 9, kasım: 10, aralık: 11,
+        };
+        const monthIndex = monthMap[monthName] ?? 0;
+        return new Date(year, monthIndex, 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function getPaymentMonthValue(payment) {
+  const referenceDate = getPaymentReferenceDate(payment);
+  if (referenceDate) return referenceDate.getMonth();
+
+  const rawMonth = String(payment?.month ?? payment?.month_label ?? payment?.monthLabel ?? '').trim();
+  if (!rawMonth) return null;
+
+  const monthMap = {
+    ocak: 0, 'şubat': 1, subat: 1, mart: 2, nisan: 3, mayıs: 4, mayis: 4, haziran: 5, temmuz: 6, agustos: 7, ağustos: 7, eylul: 8, eylül: 8, ekim: 9, kasım: 10, aralık: 11,
+  };
+
+  const normalized = rawMonth.toLowerCase();
+  const match = Object.keys(monthMap).find((month) => normalized.includes(month));
+  if (match) return monthMap[match];
+
+  const monthNumberMatch = normalized.match(/(\d{1,2})/);
+  if (monthNumberMatch) return Number(monthNumberMatch[1]) - 1;
+
+  return null;
+}
+
+function getPaymentYearValue(payment) {
+  const referenceDate = getPaymentReferenceDate(payment);
+  if (referenceDate) return referenceDate.getFullYear();
+
+  const rawMonth = String(payment?.month ?? payment?.month_label ?? payment?.monthLabel ?? '').trim();
+  if (!rawMonth) {
+    const dateText = String(payment?.dueDate ?? payment?.due_date ?? payment?.created_at ?? payment?.createdAt ?? '').trim();
+    const yearMatch = dateText.match(/(\d{4})/);
+    return yearMatch ? Number(yearMatch[1]) : null;
+  }
+
+  const yearMatch = rawMonth.match(/(\d{4})/);
+  return yearMatch ? Number(yearMatch[1]) : null;
+}
+
+function paymentMatchesDateFilter(payment, selectedMonth, selectedYear) {
+  if (selectedMonth === null && selectedYear === null) return true;
+
+  const paymentMonth = getPaymentMonthValue(payment);
+  const paymentYear = getPaymentYearValue(payment);
+
+  if (selectedMonth !== null && paymentMonth !== selectedMonth) return false;
+  if (selectedYear !== null && paymentYear !== selectedYear) return false;
+  return true;
+}
+
 function buildNextMonthPaymentRecord({ studentId, branchId, dueDate, amount }) {
   const baseDueDate = new Date(`${String(dueDate || '').slice(0, 10)}T00:00:00`);
   if (Number.isNaN(baseDueDate.getTime())) return null;
@@ -965,69 +1050,6 @@ function buildAttendanceEntry(dateKey, status) {
     status: normalizedStatus,
     ...(numericValue !== null ? { value: numericValue } : {}),
   };
-}
-
-function parseAttendanceQrPayload(rawValue) {
-  if (!rawValue) return null;
-
-  const candidate = String(rawValue).trim();
-  if (!candidate) return null;
-
-  try {
-    const parsed = JSON.parse(candidate);
-    if (parsed && typeof parsed === 'object') {
-      return parsed;
-    }
-  } catch (error) {
-    // Ignore JSON parse errors and fall back to plain text parsing.
-  }
-
-  const keyValuePattern = /([a-zA-Z_]+)\s*[:=]\s*([^&|;]+)/g;
-  const kvEntries = [...candidate.matchAll(keyValuePattern)];
-  if (kvEntries.length) {
-    const objectEntry = {};
-    kvEntries.forEach(([_, key, value]) => {
-      const normalizedKey = String(key).trim();
-      if (!normalizedKey) return;
-      objectEntry[normalizedKey] = String(value).trim();
-    });
-    if (Object.keys(objectEntry).length) {
-      return objectEntry;
-    }
-  }
-
-  const delimiterVariants = ['|', ';'];
-  for (const delimiter of delimiterVariants) {
-    const parts = candidate
-      .split(delimiter)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    if (parts.length >= 5 && (parts[0].toLowerCase().includes('sporkul') || parts[0].toLowerCase().includes('attendance') || parts[0].toLowerCase().includes('katilim'))) {
-      return {
-        type: 'attendance',
-        clubId: parts[1] || '',
-        studentId: parts[2] || '',
-        branchId: parts[3] || '',
-        date: parts[4] || '',
-        status: parts[5] || 'present',
-      };
-    }
-  }
-
-  const normalized = candidate.toLowerCase();
-  if (normalized.includes('studentid') && normalized.includes('clubid')) {
-    const kvEntriesFromQuery = new URLSearchParams(candidate.replace(/\s+/g, ''));
-    const collection = {};
-    kvEntriesFromQuery.forEach((value, key) => {
-      collection[key] = value;
-    });
-    if (Object.keys(collection).length) {
-      return collection;
-    }
-  }
-
-  return null;
 }
 
 function getCurrentParentStudentMatches(currentUser, clubsList = []) {
@@ -1113,6 +1135,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [paymentFilter, setPaymentFilter] = useState('all');
   const [paymentSearch, setPaymentSearch] = useState('');
   const [expandedPaymentStudentId, setExpandedPaymentStudentId] = useState(null);
+  const [reportBranchFilter, setReportBranchFilter] = useState('all');
+  const [paymentMonthFilter, setPaymentMonthFilter] = useState('all');
+  const [paymentYearFilter, setPaymentYearFilter] = useState('all');
   const [managerSelectedBranchId, setManagerSelectedBranchId] = useState('');
   const [managerSelectedStudentId, setManagerSelectedStudentId] = useState('');
   const [studentBranchAddValue, setStudentBranchAddValue] = useState('');
@@ -1127,6 +1152,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [profilePassword, setProfilePassword] = useState({ newPassword: '', confirmPassword: '' });
   const [showCoachPassword, setShowCoachPassword] = useState(false);
   const [showParentPassword, setShowParentPassword] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [subscriptionExtensionValues, setSubscriptionExtensionValues] = useState({});
   const [selectedStudentDetail, setSelectedStudentDetail] = useState(null);
   const [showStudentDetailModal, setShowStudentDetailModal] = useState(false);
@@ -1156,15 +1182,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
     return urlSearchParams.get('club');
   });
   const [publicClubDetails, setPublicClubDetails] = useState(null);
-  const [qrScannerState, setQrScannerState] = useState({
-    open: false,
-    error: '',
-    fallbackStudentId: '',
-    fallbackClubId: '',
-    fallbackBranchId: '',
-  });
-  const qrVideoRef = useRef(null);
-  const qrCanvasRef = useRef(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -3043,6 +3060,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const exportStudentAttendanceAndPaymentReport = () => {
+    const activeReportBranchId = reportBranchFilter && reportBranchFilter !== 'all' ? reportBranchFilter : null;
+    const selectedMonth = paymentMonthFilter && paymentMonthFilter !== 'all' ? Number(paymentMonthFilter) : null;
+    const selectedYear = paymentYearFilter && paymentYearFilter !== 'all' ? Number(paymentYearFilter) : null;
     const exportTargets = isSuperAdminRole(currentUser?.role)
       ? clubs.filter((club) => Array.isArray(club.students) && club.students.length)
       : currentClub ? [currentClub] : [];
@@ -3055,15 +3075,33 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const summaryRows = [];
     const absenceRows = [];
     const paymentRows = [];
+    const branchLabel = activeReportBranchId
+      ? (clubs.flatMap((club) => club.branches ?? []).find((branch) => branch.id === activeReportBranchId)?.name || 'Seçili Branş')
+      : 'Tüm Branşlar';
+
+    const monthLabel = selectedMonth !== null
+      ? new Intl.DateTimeFormat('tr-TR', { month: 'long' }).format(new Date(2024, selectedMonth, 1))
+      : 'Tüm Aylar';
+    const yearLabel = selectedYear !== null ? String(selectedYear) : 'Tüm Yıllar';
 
     exportTargets.forEach((club) => {
       const clubPayments = Array.isArray(club.payments) ? club.payments : [];
-      (club.students ?? []).forEach((student) => {
+      const clubStudents = (club.students ?? []).filter((student) => !activeReportBranchId || studentMatchesBranch(student, activeReportBranchId));
+
+      clubStudents.forEach((student) => {
         const attendanceEntries = Array.isArray(student.attendance) ? student.attendance : [];
         const presentCount = attendanceEntries.filter((entry) => String(entry?.status ?? '').toLowerCase() === 'present').length;
         const absentCount = attendanceEntries.filter((entry) => String(entry?.status ?? '').toLowerCase() === 'absent').length;
         const lateCount = attendanceEntries.filter((entry) => ['late', 'geç', 'passive'].includes(String(entry?.status ?? '').toLowerCase())).length;
-        const studentPayments = clubPayments.filter((payment) => String(payment.studentId ?? payment.student_id ?? '') === String(student.id ?? ''));
+        const studentPayments = clubPayments.filter((payment) => {
+          const matchesStudent = String(payment.studentId ?? payment.student_id ?? '') === String(student.id ?? '');
+          if (!matchesStudent) return false;
+          if (activeReportBranchId) {
+            const paymentBranchId = String(payment.branchId ?? payment.branch_id ?? '').trim();
+            if (paymentBranchId && paymentBranchId !== String(activeReportBranchId).trim()) return false;
+          }
+          return paymentMatchesDateFilter(payment, selectedMonth, selectedYear);
+        });
         const totalAmount = studentPayments.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
         const paidAmount = studentPayments.filter((payment) => String(payment.status ?? '').toLowerCase() === 'ödendi' || String(payment.status ?? '').toLowerCase() === 'paid').reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
         const pendingAmount = Math.max(totalAmount - paidAmount, 0);
@@ -3074,6 +3112,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
           Veli: student.parentName || 'Belirtilmemiş',
           Telefon: student.parentPhone || 'Yok',
           Durum: student.status || 'active',
+          Branş: activeReportBranchId
+            ? (club.branches ?? []).find((branch) => branch.id === activeReportBranchId)?.name || 'Seçili Branş'
+            : (getStudentBranchIds(student).map((branchId) => (club.branches ?? []).find((branch) => branch.id === branchId)?.name).filter(Boolean).join(', ') || 'Branş Yok'),
+          Ay: monthLabel,
+          Yil: yearLabel,
           KatilimSayisi: presentCount,
           DevamsizlikSayisi: absentCount,
           GecKalmaSayisi: lateCount,
@@ -3100,7 +3143,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
             Kulup: club.name || 'Kulüp',
             Ogrenci: student.name || student.full_name || student.studentName || 'Öğrenci',
             Veli: student.parentName || 'Belirtilmemiş',
+            Branş: (club.branches ?? []).find((branch) => String(branch.id) === String(payment.branchId ?? payment.branch_id ?? ''))?.name || 'Branş',
             Ay: payment.month || payment.month_label || payment.dueDate || '',
+            Yil: getPaymentYearValue(payment) || new Date(payment.dueDate || payment.created_at || Date.now()).getFullYear(),
             Tutar: Number(payment.amount ?? 0),
             Durum: payment.status || 'Ödenmedi',
             SonOdemeTarihi: payment.dueDate || payment.created_at || '',
@@ -3108,6 +3153,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
         });
       });
     });
+
+    if (!summaryRows.length && !absenceRows.length && !paymentRows.length) {
+      alert('Seçilen branş ve tarih filtresi için indirilecek veri bulunamadı.');
+      return;
+    }
 
     const workbook = XLSX.utils.book_new();
     const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
@@ -3118,11 +3168,24 @@ function AppClean({ initialPublicClubId = null } = {}) {
     XLSX.utils.book_append_sheet(workbook, absenceSheet, 'Devamsizlik');
     XLSX.utils.book_append_sheet(workbook, paymentSheet, 'Aidat');
 
-    const fileName = `${(isSuperAdminRole(currentUser?.role) ? 'super-admin' : (currentClub?.name || 'kulup')).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}-raporu-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const sanitizedBranchLabel = String(branchLabel || 'tum-branslar').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+    const sanitizedFilterLabel = `${selectedMonth !== null ? monthLabel : 'tum-ay'}-${selectedYear !== null ? yearLabel : 'tum-yil'}`.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+    const fileName = `${(isSuperAdminRole(currentUser?.role) ? 'super-admin' : (currentClub?.name || 'kulup')).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}-${sanitizedBranchLabel}-${sanitizedFilterLabel}-raporu-${new Date().toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(workbook, fileName);
   };
 
   const canExportExcelReport = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager';
+  const availableReportBranches = useMemo(() => {
+    const sourceClubs = isSuperAdminRole(currentUser?.role) ? clubs : currentClub ? [currentClub] : [];
+    const branchMap = new Map();
+    sourceClubs.forEach((club) => {
+      (club.branches ?? []).forEach((branch) => {
+        if (!branch?.id) return;
+        branchMap.set(branch.id, { id: branch.id, name: branch.name, clubId: club.id, clubName: club.name });
+      });
+    });
+    return [...branchMap.values()];
+  }, [clubs, currentClub, currentUser]);
 
   const renderSuperAdminPanel = () => (
     <div className="space-y-6">
@@ -3132,7 +3195,37 @@ function AppClean({ initialPublicClubId = null } = {}) {
           <span className="status-pill bg-violet-500/15 text-violet-300">Platform Sahibi</span>
         </div>
         {canExportExcelReport && (
-          <div className="mb-4 flex justify-end">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+            <select
+              className="input-shell min-w-[180px]"
+              value={reportBranchFilter}
+              onChange={(event) => setReportBranchFilter(event.target.value)}
+            >
+              <option value="all">Tüm Branşlar</option>
+              {availableReportBranches.map((branch, branchIndex) => (
+                <option key={`${branch.id ?? 'report-branch'}-${branchIndex}`} value={branch.id}>{branch.name}</option>
+              ))}
+            </select>
+            <select
+              className="input-shell min-w-[140px]"
+              value={paymentMonthFilter}
+              onChange={(event) => setPaymentMonthFilter(event.target.value)}
+            >
+              <option value="all">Tüm Aylar</option>
+              {Array.from({ length: 12 }, (_, index) => (
+                <option key={`month-${index}`} value={String(index)}>{new Intl.DateTimeFormat('tr-TR', { month: 'long' }).format(new Date(2024, index, 1))}</option>
+              ))}
+            </select>
+            <select
+              className="input-shell min-w-[120px]"
+              value={paymentYearFilter}
+              onChange={(event) => setPaymentYearFilter(event.target.value)}
+            >
+              <option value="all">Tüm Yıllar</option>
+              {Array.from(new Set([...clubs.flatMap((club) => (club.payments ?? []).map((payment) => getPaymentYearValue(payment)).filter(Boolean))].sort((a, b) => b - a))).map((year) => (
+                <option key={`year-${year}`} value={String(year)}>{year}</option>
+              ))}
+            </select>
             <button
               type="button"
               className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
@@ -4040,7 +4133,48 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
         {managerTab === 'payments' && (
           <div className="card-surface rounded-3xl p-4 sm:p-6">
-            <h3 className="mb-4 text-xl font-semibold text-white">Aidat ve Ödeme Takibi</h3>
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="text-xl font-semibold text-white">Aidat ve Ödeme Takibi</h3>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  className="input-shell min-w-[180px]"
+                  value={reportBranchFilter}
+                  onChange={(event) => setReportBranchFilter(event.target.value)}
+                >
+                  <option value="all">Tüm Branşlar</option>
+                  {(currentClub?.branches ?? []).map((branch, branchIndex) => (
+                    <option key={`${branch.id ?? 'manager-report-branch'}-${branchIndex}`} value={branch.id}>{branch.name}</option>
+                  ))}
+                </select>
+                <select
+                  className="input-shell min-w-[140px]"
+                  value={paymentMonthFilter}
+                  onChange={(event) => setPaymentMonthFilter(event.target.value)}
+                >
+                  <option value="all">Tüm Aylar</option>
+                  {Array.from({ length: 12 }, (_, index) => (
+                    <option key={`manager-month-${index}`} value={String(index)}>{new Intl.DateTimeFormat('tr-TR', { month: 'long' }).format(new Date(2024, index, 1))}</option>
+                  ))}
+                </select>
+                <select
+                  className="input-shell min-w-[120px]"
+                  value={paymentYearFilter}
+                  onChange={(event) => setPaymentYearFilter(event.target.value)}
+                >
+                  <option value="all">Tüm Yıllar</option>
+                  {Array.from(new Set([...((currentClub?.payments ?? []).map((payment) => getPaymentYearValue(payment)).filter(Boolean))].sort((a, b) => b - a))).map((year) => (
+                    <option key={`manager-year-${year}`} value={String(year)}>{year}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+                  onClick={exportStudentAttendanceAndPaymentReport}
+                >
+                  📥 Excel Raporu İndir
+                </button>
+              </div>
+            </div>
             <div className="overflow-x-auto rounded-2xl border border-slate-700">
               <table className="min-w-full divide-y divide-slate-700 text-left text-sm text-slate-300">
                 <thead className="bg-slate-900/80 text-slate-300">
@@ -4055,7 +4189,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 </thead>
                 <tbody className="divide-y divide-slate-800 bg-slate-950/40">
                   {(currentClub?.students || []).flatMap((student) => {
-                    const studentRows = getStudentPaymentRows(currentClub, student);
+                    const studentRows = getStudentPaymentRows(currentClub, student).filter((paymentRow) => {
+                      const branchMatches = reportBranchFilter === 'all' || paymentRow.branchId === reportBranchFilter;
+                      const monthMatches = paymentMonthFilter === 'all' || getPaymentMonthValue({ month: paymentRow.month, dueDate: paymentRow.dueDate }) === Number(paymentMonthFilter);
+                      const yearMatches = paymentYearFilter === 'all' || getPaymentYearValue({ month: paymentRow.month, dueDate: paymentRow.dueDate }) === Number(paymentYearFilter);
+                      return branchMatches && monthMatches && yearMatches;
+                    });
                     if (!studentRows.length) return [];
 
                     return studentRows.map((paymentRow) => {
@@ -4297,31 +4436,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
         }
       : null;
 
-    const [coachQrPayload, setCoachQrPayload] = useState('');
-    const [showCoachQr, setShowCoachQr] = useState(false);
-    const coachQrUrl = coachQrPayload
-      ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(coachQrPayload)}`
-      : '';
-
-    const generateCoachQr = () => {
-      if (!coachClub || !selectedCoachBranchId) {
-        setCoachQrPayload('');
-        setShowCoachQr(false);
-        return;
-      }
-
-      const nextPayload = {
-        type: 'attendance',
-        clubId: coachClub.id,
-        branchId: selectedCoachBranchId,
-        date: new Date().toISOString().slice(0, 10),
-        status: 'present',
-      };
-
-      setCoachQrPayload(JSON.stringify(nextPayload));
-      setShowCoachQr(true);
-    };
-
     const effectiveSelectedCoachId = currentUser?.role === 'coach'
       ? (selectedCoachId || currentCoachMatch?.id || currentUser.id || coachListForClub[0]?.id || '')
       : (selectedCoachId || coachListForClub[0]?.id || '');
@@ -4484,27 +4598,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
               <div className="flex flex-wrap items-center gap-2">
                 <button className="secondary-btn" onClick={() => coachStudents.forEach((student) => handleAttendanceUpdate(student.id, 'present'))}>Tümünü Katıldı</button>
-                <button
-                  type="button"
-                  className="primary-btn"
-                  onClick={generateCoachQr}
-                  disabled={!selectedCoachBranchId || !coachClub}
-                >
-                  Ders QR Oluştur
-                </button>
               </div>
             </div>
-
-            {selectedCoachBranchId && showCoachQr && coachQrPayload && coachQrUrl && (
-              <div className="mb-5 rounded-2xl border border-violet-500/30 bg-violet-500/10 p-4">
-                <div className="mb-3 text-xs uppercase tracking-[0.2em] text-violet-200">Ders QR</div>
-                <div className="mb-3 text-sm text-slate-200">{branchName} • {new Date().toISOString().slice(0, 10)}</div>
-                <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-950/60 p-4 text-center">
-                  <img src={coachQrUrl} alt="Ders katılım QR" className="h-52 w-52 rounded-xl border border-slate-700 bg-white p-2" />
-                  <div className="text-xs text-slate-300">Veliler bu QR'ı okutarak günlük katılımı işaretleyebilir.</div>
-                </div>
-              </div>
-            )}
 
             {coachStudents.length === 0 ? (
               <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 text-sm text-slate-400">Bu branş için atanmış öğrenci bulunmuyor.</div>
@@ -4638,227 +4733,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
     );
   };
 
-  const processAttendanceScanPayload = async (rawValue, fallbackStudentId = '', fallbackClubId = '', fallbackBranchId = '') => {
-    const parsed = parseAttendanceQrPayload(rawValue);
-    if (!parsed || typeof parsed !== 'object') {
-      return { ok: false, reason: 'QR içeriği okunamadı. Lütfen geçerli bir ders/egzersiz kodu okutunuz.' };
-    }
-
-    const today = new Date().toISOString().slice(0, 10);
-    const payloadStudentId = String(parsed.studentId || parsed.student_id || parsed.id || fallbackStudentId || '').trim();
-    const payloadClubId = String(parsed.clubId || parsed.club_id || fallbackClubId || currentUser?.clubId || selectedClubId || '').trim();
-    const payloadBranchId = String(parsed.branchId || parsed.branch_id || fallbackBranchId || '').trim();
-    const payloadDate = String(parsed.date || parsed.lessonDate || parsed.sessionDate || parsed.day || '').slice(0, 10);
-    const payloadStatus = parsed.status || parsed.attendance || parsed.value || 'present';
-
-    if (payloadDate && payloadDate !== today) {
-      return { ok: false, reason: 'QR kod bugünkü ders/egzersizle eşleşmiyor.' };
-    }
-
-    let matchedStudent = null;
-    if (payloadStudentId) {
-      matchedStudent = clubs
-        .flatMap((club) => club.students ?? [])
-        .find((student) => String(student.id) === payloadStudentId || String(student.id).toLowerCase() === payloadStudentId.toLowerCase());
-    }
-
-    if (!matchedStudent && (currentUser?.role === 'parent' || currentUser?.role === 'veli' || activeRole === 'parent' || activeRole === 'veli')) {
-      const parentMatches = getCurrentParentStudentMatches(currentUser, clubs);
-      matchedStudent = parentMatches.find((student) => {
-        if (payloadClubId) {
-          const clubId = student.clubId || clubs.find((club) => (club.students ?? []).some((item) => String(item.id) === String(student.id)))?.id || '';
-          if (clubId && String(clubId) !== payloadClubId) return false;
-        }
-        if (payloadBranchId) {
-          return getStudentBranchIds(student).includes(payloadBranchId)
-            || (student.branchId && String(student.branchId) === payloadBranchId)
-            || (student.branch_id && String(student.branch_id) === payloadBranchId);
-        }
-        return true;
-      }) ?? parentMatches[0] ?? null;
-    }
-
-    if (!matchedStudent) {
-      return { ok: false, reason: 'QR kodu ile eşleşen öğrenci bulunamadı.' };
-    }
-
-    const resolvedStudentId = String(matchedStudent.id).trim();
-
-    if (payloadClubId) {
-      const studentClubId = matchedStudent.clubId || matchedStudent.club_id || clubs.find((club) => (club.students ?? []).some((student) => String(student.id) === String(matchedStudent.id)))?.id || '';
-      if (studentClubId && String(studentClubId) !== payloadClubId) {
-        return { ok: false, reason: 'QR kodu bu kulüple eşleşmiyor.' };
-      }
-    }
-
-    if (payloadBranchId) {
-      const branchMatches = getStudentBranchIds(matchedStudent).includes(payloadBranchId) || (matchedStudent.branchId && String(matchedStudent.branchId) === payloadBranchId) || (matchedStudent.branch_id && String(matchedStudent.branch_id) === payloadBranchId);
-      if (!branchMatches) {
-        return { ok: false, reason: 'QR kodu bu branşla eşleşmiyor.' };
-      }
-    }
-
-    const nextStatus = normalizeAttendanceStatus(payloadStatus);
-    if (nextStatus === 'pending') {
-      return { ok: false, reason: 'QR kodu katılım için uygun değil.' };
-    }
-
-    await handleAttendanceUpdate(resolvedStudentId, nextStatus);
-
-    return {
-      ok: true,
-      status: nextStatus,
-      studentName: matchedStudent.name || matchedStudent.full_name || 'Öğrenci',
-    };
-  };
-
-  useEffect(() => {
-    if (!qrScannerState.open) return undefined;
-
-    let active = true;
-    let stream = null;
-    let rafId = null;
-
-    const stopStream = () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-    };
-
-    const startScan = async () => {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setQrScannerState((prev) => ({ ...prev, error: 'Bu cihazda kamera erişimi desteklenmiyor.' }));
-        return;
-      }
-
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,
-        });
-
-        if (!active || !qrVideoRef.current) return;
-
-        qrVideoRef.current.srcObject = stream;
-        await qrVideoRef.current.play();
-
-        const scanFrame = () => {
-          if (!active || !qrVideoRef.current || !qrCanvasRef.current) return;
-
-          const video = qrVideoRef.current;
-          const canvas = qrCanvasRef.current;
-          const context = canvas.getContext('2d');
-
-          if (video.readyState >= 2) {
-            canvas.width = video.videoWidth || 640;
-            canvas.height = video.videoHeight || 480;
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsqr(imageData.data, canvas.width, canvas.height);
-
-            if (code) {
-              const rawValue = code.data;
-              void processAttendanceScanPayload(
-                rawValue,
-                qrScannerState.fallbackStudentId,
-                qrScannerState.fallbackClubId,
-                qrScannerState.fallbackBranchId
-              ).then((result) => {
-                if (!active) return;
-
-                if (result.ok) {
-                  setToastMessage(`${result.studentName || 'Öğrenci'} için bugün katılım kaydedildi.`);
-                  setQrScannerState({
-                    open: false,
-                    error: '',
-                    fallbackStudentId: '',
-                    fallbackClubId: '',
-                    fallbackBranchId: '',
-                  });
-                  return;
-                }
-
-                setQrScannerState((prev) => ({ ...prev, error: result.reason || 'QR kod okunamadı.' }));
-              });
-
-              return;
-            }
-          }
-
-          rafId = window.requestAnimationFrame(scanFrame);
-        };
-
-        rafId = window.requestAnimationFrame(scanFrame);
-      } catch (error) {
-        console.error('QR camera open failed:', error);
-        setQrScannerState((prev) => ({ ...prev, error: 'Kamera açılamadı. Lütfen izin verin veya tekrar deneyin.' }));
-      }
-    };
-
-    void startScan();
-
-    return () => {
-      active = false;
-      if (rafId) {
-        window.cancelAnimationFrame(rafId);
-      }
-      stopStream();
-      if (qrVideoRef.current) {
-        qrVideoRef.current.srcObject = null;
-      }
-    };
-  }, [qrScannerState.open, qrScannerState.fallbackStudentId, qrScannerState.fallbackClubId, qrScannerState.fallbackBranchId]);
-
-  const renderQrScannerModal = () => (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-      <div className="card-surface w-full max-w-xl overflow-hidden rounded-[28px] border border-slate-700">
-        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-violet-300">QR ile giriş</p>
-            <h3 className="text-xl font-bold text-white">Ders / Antrenman Katılımı</h3>
-          </div>
-          <button className="text-2xl text-slate-300 hover:text-white" onClick={() => setQrScannerState((prev) => ({ ...prev, open: false, error: '' }))}>×</button>
-        </div>
-
-        <div className="space-y-4 px-5 py-5">
-          <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/80">
-            <video ref={qrVideoRef} className="h-72 w-full object-cover" playsInline muted autoPlay />
-            <canvas ref={qrCanvasRef} className="hidden" />
-          </div>
-
-          {qrScannerState.error && (
-            <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-              {qrScannerState.error}
-            </div>
-          )}
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <input
-              className="input-shell"
-              placeholder="Öğrenci ID (opsiyonel)"
-              value={qrScannerState.fallbackStudentId}
-              onChange={(event) => setQrScannerState((prev) => ({ ...prev, fallbackStudentId: event.target.value }))}
-            />
-            <input
-              className="input-shell"
-              placeholder="Kulüp ID (opsiyonel)"
-              value={qrScannerState.fallbackClubId}
-              onChange={(event) => setQrScannerState((prev) => ({ ...prev, fallbackClubId: event.target.value }))}
-            />
-          </div>
-
-          <input
-            className="input-shell w-full"
-            placeholder="Branş ID (opsiyonel)"
-            value={qrScannerState.fallbackBranchId}
-            onChange={(event) => setQrScannerState((prev) => ({ ...prev, fallbackBranchId: event.target.value }))}
-          />
-        </div>
-      </div>
-    </div>
-  );
-
   const renderParentPanel = () => {
     const adminFilterEnabled = isSuperAdminRole(currentUser?.role) || currentUser?.role === 'club-manager' || activeRole === 'club-manager' || activeRole === 'super-admin' || activeRole === 'super_admin';
     const isPlainParentSession = !adminFilterEnabled && (currentUser?.role === 'parent' || currentUser?.role === 'veli' || activeRole === 'parent' || activeRole === 'veli');
@@ -4988,13 +4862,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
               <h2 className="text-2xl font-bold text-white">{parentHeaderName}</h2>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="primary-btn"
-                onClick={() => setQrScannerState((prev) => ({ ...prev, open: true, error: '' }))}
-              >
-                📷 QR ile Giriş
-              </button>
+              {targetStudent && (
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => handleAttendanceUpdate(targetStudent.id, 'present')}
+                >
+                  Derse Katıldım
+                </button>
+              )}
               <div className="rounded-xl border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-sm text-orange-200">Kullanıcı: {parentHeaderUsername}</div>
             </div>
           </div>
@@ -5501,13 +5377,23 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   defaultValue=""
                   id="login-input"
                 />
-                <input
-                  className="input-shell"
-                  type="password"
-                  placeholder="Şifre"
-                  defaultValue=""
-                  id="password-input"
-                />
+                <div className="relative">
+                  <input
+                    className="input-shell w-full pr-12"
+                    type={showLoginPassword ? 'text' : 'password'}
+                    placeholder="Şifre"
+                    defaultValue=""
+                    id="password-input"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-slate-300"
+                    onClick={() => setShowLoginPassword((prev) => !prev)}
+                    aria-label="Şifreyi göster/gizle"
+                  >
+                    {showLoginPassword ? '🙈' : '👁️'}
+                  </button>
+                </div>
                 <button
                   className="primary-btn w-full"
                   onClick={handleLogin}
@@ -6509,7 +6395,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
       {showAttendanceSummaryModal && renderAttendanceSummaryModal()}
       {showStudentDetailModal && renderStudentDetailModal()}
       {showKvkkModal && renderKvkkModal()}
-      {qrScannerState.open && renderQrScannerModal()}
       {whatsappEditState.open && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
           <div className="card-surface w-full max-w-xl overflow-hidden rounded-[28px] border border-slate-700">
