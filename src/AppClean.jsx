@@ -545,16 +545,29 @@ async function fetchAllClubsFromSupabase() {
     .map((club) => {
       const normalized = normalizeClubRecord(club);
       if (!normalized) return null;
+
+      const clubCoaches = coachesByClubId[club.id] ?? [];
+
       return {
         ...normalized,
-        branches: (branchesByClubId[club.id] ?? []).map((branch) => ({
-          ...branch,
-          fee: Number(branch.fee ?? branch.monthly_fee ?? 0),
-          monthlyFee: Number(branch.monthlyFee ?? branch.monthly_fee ?? branch.fee ?? 0),
-          coachIds: safeCoachIdList(branch.coachIds),
-        })),
+        branches: (branchesByClubId[club.id] ?? []).map((branch) => {
+          const branchCoachIds = normalizeCoachIdList([
+            ...(safeCoachIdList(branch.coachIds) ?? []),
+            ...clubCoaches
+              .filter((coach) => String(coach.branchId ?? coach.branch_id ?? '').trim() === String(branch.id).trim())
+              .map((coach) => String(coach.id ?? '').trim())
+              .filter(Boolean),
+          ]);
+
+          return {
+            ...branch,
+            fee: Number(branch.fee ?? branch.monthly_fee ?? 0),
+            monthlyFee: Number(branch.monthlyFee ?? branch.monthly_fee ?? branch.fee ?? 0),
+            coachIds: branchCoachIds,
+          };
+        }),
         students: studentsByClubId[club.id] ?? [],
-        coaches: coachesByClubId[club.id] ?? [],
+        coaches: clubCoaches,
         pendingApplications: applicationsByClubId[club.id] ?? [],
         incomingMessages: messagesByClubId[club.id] ?? [],
         notifications: notificationsByClubId[club.id] ?? [],
@@ -4094,7 +4107,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium text-white">{branch.name}</span>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs text-slate-400">{branch.coachIds?.length ?? 0} antrenör</span>
+                        <span className="text-xs text-slate-400">
+                          {((currentClub?.coaches ?? []).filter((coach) => String(coach.branchId ?? coach.branch_id ?? '').trim() === String(branch.id).trim()).length || branch.coachIds?.length || 0)} antrenör
+                        </span>
                         <button
                           type="button"
                           className="rounded-lg border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-200 transition hover:bg-red-500/20"
