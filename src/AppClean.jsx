@@ -8,7 +8,10 @@ const initialUsers = [];
 
 const initialClubs = [];
 
-const SUSPENDED_ACCESS_MESSAGE = 'Hesabınız askıya alınmıştır, lütfen yöneticiyle iletişime geçin';
+const APP_CONTACT_EMAIL = 'sporkulubuyonetimsistemi@gmail.com';
+const GENERIC_SUSPENDED_ACCESS_MESSAGE = 'Hesabınız askıya alınmıştır';
+const CLUB_MANAGER_SUSPENDED_ACCESS_MESSAGE = 'Abonelik süreniz dolmuştur, Hesabınız askıya alınmıştır . Bilgi icin sporkulubuyonetimsistemi@gmail.com mail atınız .';
+const SUSPENDED_ACCESS_MESSAGE = GENERIC_SUSPENDED_ACCESS_MESSAGE;
 
 const LOCKED_SUPER_ADMIN_EMAIL = 'sagliksk@gmail.com';
 
@@ -292,6 +295,14 @@ function normalizeClubRecord(club) {
 function isClubSuspended(clubLike) {
   if (!clubLike || typeof clubLike !== 'object') return false;
   return Boolean(clubLike.suspended || clubLike.is_suspended || clubLike.isSuspended);
+}
+
+function getSuspendedAccessMessageByRole(role) {
+  const normalizedRole = String(role ?? '').trim().toLowerCase();
+  if (normalizedRole === 'club-manager' || normalizedRole === 'club_manager') {
+    return CLUB_MANAGER_SUSPENDED_ACCESS_MESSAGE;
+  }
+  return GENERIC_SUSPENDED_ACCESS_MESSAGE;
 }
 
 function hasSuspendedClubAccess(userLike, clubsList = []) {
@@ -2333,7 +2344,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     if (!isSuperAdminRole(match.role) && clubMatch && isClubSuspended(clubMatch)) {
       clearLoginForm();
-      alert(SUSPENDED_ACCESS_MESSAGE);
+      alert(getSuspendedAccessMessageByRole(match.role));
       return;
     }
 
@@ -2397,7 +2408,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       }
 
       if (currentUser && (currentUser.clubId === clubId || normalizeDbClubId(currentUser.clubId) === normalizeDbClubId(clubId)) && nextSuspended) {
-        alert(SUSPENDED_ACCESS_MESSAGE);
+        alert(getSuspendedAccessMessageByRole(currentUser.role));
       }
     } catch (error) {
       console.error('Kulüp askıya alma işlemi başarısız:', error);
@@ -5893,16 +5904,23 @@ function AppClean({ initialPublicClubId = null } = {}) {
     );
   };
 
-  const renderBlockedAccessScreen = () => (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-10">
-      <div className="w-full max-w-xl rounded-[28px] border border-red-500/30 bg-slate-900/80 p-8 text-center shadow-glow">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-3xl">⚠️</div>
-        <h2 className="text-2xl font-bold text-white">Hesabınız askıya alınmıştır</h2>
-        <p className="mt-3 text-slate-300">{SUSPENDED_ACCESS_MESSAGE}</p>
-        <button className="primary-btn mt-6" onClick={handleLogout}>Çıkış Yap</button>
+  const renderBlockedAccessScreen = () => {
+    const isManagerAccessBlock = String(currentUser?.role ?? '').trim().toLowerCase() === 'club-manager';
+
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-10">
+        <div className="w-full max-w-xl rounded-[28px] border border-red-500/30 bg-slate-900/80 p-8 text-center shadow-glow">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-3xl">⚠️</div>
+          {isManagerAccessBlock ? (
+            <p className="text-lg font-semibold leading-8 text-slate-100">{CLUB_MANAGER_SUSPENDED_ACCESS_MESSAGE}</p>
+          ) : (
+            <h2 className="text-2xl font-bold text-white">{GENERIC_SUSPENDED_ACCESS_MESSAGE}</h2>
+          )}
+          <button className="primary-btn mt-6" onClick={handleLogout}>Çıkış Yap</button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const openWhatsAppWithMessage = (number, text) => {
     const sanitized = normalizeWhatsappNumber(number);
@@ -5955,7 +5973,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       });
 
       if (!isSuperAdminRole(mappedUser.role) && clubForUser && isClubSuspended(clubForUser)) {
-        alert(SUSPENDED_ACCESS_MESSAGE);
+        alert(getSuspendedAccessMessageByRole(mappedUser.role));
         return null;
       }
 
@@ -6094,7 +6112,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
             club_id: clubMatch.id,
           }, 'club-manager');
           if (!mappedUser) {
-            alert(SUSPENDED_ACCESS_MESSAGE);
+            alert(getSuspendedAccessMessageByRole('club-manager'));
             return;
           }
           console.log('Clubs tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
@@ -6123,7 +6141,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
         }, 'coach');
 
         if (!mappedUser) {
-          alert(SUSPENDED_ACCESS_MESSAGE);
+          alert(getSuspendedAccessMessageByRole(mappedUser?.role));
           return;
         }
 
@@ -6190,7 +6208,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
             club_id: profileMatch.club_id || null,
           }, profileMatch.role || 'parent');
           if (!mappedUser) {
-            alert(SUSPENDED_ACCESS_MESSAGE);
+            alert(getSuspendedAccessMessageByRole(profileMatch.role || 'parent'));
             return;
           }
           console.log('Profiles tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
@@ -6207,7 +6225,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       });
 
       if (!isSuperAdminRole(localMatchingUser.role) && localClub && isClubSuspended(localClub)) {
-        alert(SUSPENDED_ACCESS_MESSAGE);
+        alert(getSuspendedAccessMessageByRole(localMatchingUser.role));
         return;
       }
 
@@ -6312,6 +6330,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
               </div>
             </div>
           </div>
+        </div>
+        <div className="mx-auto mt-6 max-w-6xl text-center text-sm text-slate-400">
+          <span>İletişim: {APP_CONTACT_EMAIL}</span>
         </div>
       </div>
     </div>
