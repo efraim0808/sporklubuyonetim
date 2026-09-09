@@ -3,18 +3,20 @@
 
 BEGIN;
 
-DROP TABLE IF EXISTS club_messages CASCADE;
-DROP TABLE IF EXISTS club_notifications CASCADE;
-DROP TABLE IF EXISTS club_announcements CASCADE;
-DROP TABLE IF EXISTS club_payments CASCADE;
-DROP TABLE IF EXISTS club_students CASCADE;
-DROP TABLE IF EXISTS club_branches CASCADE;
-DROP TABLE IF EXISTS club_coaches CASCADE;
-DROP TABLE IF EXISTS club_applications CASCADE;
-DROP TABLE IF EXISTS clubs CASCADE;
-DROP TABLE IF EXISTS profiles CASCADE;
+SET search_path = public, auth;
 
-CREATE TABLE IF NOT EXISTS clubs (
+DROP TABLE IF EXISTS public.club_messages CASCADE;
+DROP TABLE IF EXISTS public.club_notifications CASCADE;
+DROP TABLE IF EXISTS public.club_announcements CASCADE;
+DROP TABLE IF EXISTS public.club_payments CASCADE;
+DROP TABLE IF EXISTS public.club_students CASCADE;
+DROP TABLE IF EXISTS public.club_branches CASCADE;
+DROP TABLE IF EXISTS public.club_coaches CASCADE;
+DROP TABLE IF EXISTS public.club_applications CASCADE;
+DROP TABLE IF EXISTS public.clubs CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+
+CREATE TABLE IF NOT EXISTS public.clubs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   manager_name TEXT,
@@ -28,9 +30,9 @@ CREATE TABLE IF NOT EXISTS clubs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS profiles (
+CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID REFERENCES clubs(id) ON DELETE CASCADE,
+  club_id UUID REFERENCES public.clubs(id) ON DELETE CASCADE,
   auth_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   role TEXT NOT NULL DEFAULT 'super-admin',
   full_name TEXT NOT NULL DEFAULT 'Süper Admin',
@@ -38,28 +40,28 @@ CREATE TABLE IF NOT EXISTS profiles (
   password TEXT,
   email TEXT,
   phone TEXT,
-  branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
+  branch_id UUID REFERENCES public.club_branches(id) ON DELETE SET NULL,
   branch_name TEXT,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS club_branches (
+CREATE TABLE IF NOT EXISTS public.club_branches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+  club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   monthly_fee NUMERIC(10,2) NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS club_coaches (
+CREATE TABLE IF NOT EXISTS public.club_coaches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+  club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   username TEXT NOT NULL,
   password TEXT,
   phone TEXT,
-  branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
+  branch_id UUID REFERENCES public.club_branches(id) ON DELETE SET NULL,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -72,10 +74,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_club_coaches_identity
     LOWER(TRIM(username))
   );
 
-CREATE TABLE IF NOT EXISTS club_students (
+CREATE TABLE IF NOT EXISTS public.club_students (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
-  branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
+  club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
+  branch_id UUID REFERENCES public.club_branches(id) ON DELETE SET NULL,
   full_name TEXT NOT NULL,
   birth_date DATE,
   parent_name TEXT,
@@ -88,32 +90,32 @@ CREATE TABLE IF NOT EXISTS club_students (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS club_payments (
+CREATE TABLE IF NOT EXISTS public.club_payments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
-  student_id UUID NOT NULL REFERENCES club_students(id) ON DELETE CASCADE,
-  branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
+  club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL REFERENCES public.club_students(id) ON DELETE CASCADE,
+  branch_id UUID REFERENCES public.club_branches(id) ON DELETE SET NULL,
   amount NUMERIC(10,2) NOT NULL DEFAULT 0,
   due_date DATE,
   status TEXT NOT NULL DEFAULT 'Ödenmedi',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS club_announcements (
+CREATE TABLE IF NOT EXISTS public.club_announcements (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+  club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   message TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS club_notifications (
+CREATE TABLE IF NOT EXISTS public.club_notifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+  club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
   user_id UUID,
   type TEXT NOT NULL DEFAULT 'notification',
   text TEXT NOT NULL,
-  student_id UUID REFERENCES club_students(id) ON DELETE SET NULL,
+  student_id UUID REFERENCES public.club_students(id) ON DELETE SET NULL,
   student_name TEXT,
   parent_phone TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -123,7 +125,7 @@ ALTER TABLE public.club_notifications
   ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'notification';
 
 ALTER TABLE public.club_notifications
-  ADD COLUMN IF NOT EXISTS student_id UUID REFERENCES club_students(id) ON DELETE SET NULL;
+  ADD COLUMN IF NOT EXISTS student_id UUID REFERENCES public.club_students(id) ON DELETE SET NULL;
 
 ALTER TABLE public.club_notifications
   ADD COLUMN IF NOT EXISTS student_name TEXT;
@@ -131,12 +133,42 @@ ALTER TABLE public.club_notifications
 ALTER TABLE public.club_notifications
   ADD COLUMN IF NOT EXISTS parent_phone TEXT;
 
-CREATE TABLE IF NOT EXISTS club_messages (
+CREATE OR REPLACE FUNCTION public.club_is_active_for_access(club_uuid UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT NOT EXISTS (
+    SELECT 1
+    FROM public.clubs c
+    WHERE c.id = club_uuid
+      AND c.suspended = true
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.profile_is_active_for_access(profile_uuid UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT NOT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    LEFT JOIN public.clubs c ON c.id = p.club_id
+    WHERE p.id = profile_uuid
+      AND (
+        p.is_active = false
+        OR (c.id IS NOT NULL AND c.suspended = true)
+      )
+  );
+$$;
+
+CREATE TABLE IF NOT EXISTS public.club_messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+  club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
   sender_name TEXT NOT NULL,
   sender_role TEXT NOT NULL,
-  student_id UUID REFERENCES club_students(id) ON DELETE SET NULL,
+  student_id UUID REFERENCES public.club_students(id) ON DELETE SET NULL,
   student_name TEXT,
   message TEXT NOT NULL,
   read BOOLEAN NOT NULL DEFAULT false,
@@ -146,15 +178,15 @@ CREATE TABLE IF NOT EXISTS club_messages (
 ALTER TABLE public.club_messages
   ADD COLUMN IF NOT EXISTS read BOOLEAN NOT NULL DEFAULT false;
 
-CREATE TABLE IF NOT EXISTS club_applications (
+CREATE TABLE IF NOT EXISTS public.club_applications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  club_id UUID NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+  club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
   student_name TEXT NOT NULL,
   student_surname TEXT NOT NULL,
   birth_date DATE,
   parent_name TEXT NOT NULL,
   parent_phone TEXT NOT NULL,
-  branch_id UUID REFERENCES club_branches(id) ON DELETE SET NULL,
+  branch_id UUID REFERENCES public.club_branches(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   notes TEXT,
   files JSONB DEFAULT '[]'::jsonb,
@@ -165,38 +197,18 @@ CREATE TABLE IF NOT EXISTS club_applications (
 ALTER TABLE public.club_applications
   ADD COLUMN IF NOT EXISTS password TEXT;
 
-ALTER TABLE clubs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE club_branches ENABLE ROW LEVEL SECURITY;
-ALTER TABLE club_coaches ENABLE ROW LEVEL SECURITY;
-ALTER TABLE club_students ENABLE ROW LEVEL SECURITY;
-ALTER TABLE club_payments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE club_announcements ENABLE ROW LEVEL SECURITY;
-ALTER TABLE club_notifications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE club_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE club_applications ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "clubs_all_access" ON clubs;
-DROP POLICY IF EXISTS "profiles_all_access" ON profiles;
-DROP POLICY IF EXISTS "club_branches_all_access" ON club_branches;
-DROP POLICY IF EXISTS "club_coaches_all_access" ON club_coaches;
-DROP POLICY IF EXISTS "club_students_all_access" ON club_students;
-DROP POLICY IF EXISTS "club_payments_all_access" ON club_payments;
-DROP POLICY IF EXISTS "club_announcements_all_access" ON club_announcements;
-DROP POLICY IF EXISTS "club_notifications_all_access" ON club_notifications;
-DROP POLICY IF EXISTS "club_messages_all_access" ON club_messages;
-DROP POLICY IF EXISTS "club_applications_all_access" ON club_applications;
-
-CREATE POLICY "clubs_all_access" ON clubs FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "profiles_all_access" ON profiles FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "club_branches_all_access" ON club_branches FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "club_coaches_all_access" ON club_coaches FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "club_students_all_access" ON club_students FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "club_payments_all_access" ON club_payments FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "club_announcements_all_access" ON club_announcements FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "club_notifications_all_access" ON club_notifications FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "club_messages_all_access" ON club_messages FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "club_applications_all_access" ON club_applications FOR ALL USING (true) WITH CHECK (true);
+-- Access control is intentionally handled in the frontend application layer.
+-- RLS is disabled here so suspended-club checks remain centralized in the UI logic.
+ALTER TABLE public.clubs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_branches DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_coaches DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_students DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_payments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_announcements DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_notifications DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_messages DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_applications DISABLE ROW LEVEL SECURITY;
 
 WITH ranked_coaches AS (
   SELECT id,

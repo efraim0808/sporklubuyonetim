@@ -29,13 +29,17 @@ DELETE FROM public.profiles
 WHERE role IS NOT NULL
   AND LOWER(role) NOT IN ('super-admin', 'super_admin');
 
-ALTER TABLE public.club_notifications ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "club_notifications_all_access" ON public.club_notifications;
-CREATE POLICY "club_notifications_all_access"
-  ON public.club_notifications
-  FOR ALL
-  USING (true)
-  WITH CHECK (true);
+-- Frontend-only authorization: access control is enforced in the application, not in database policies.
+ALTER TABLE public.club_notifications DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.clubs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_branches DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_coaches DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_students DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_payments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_announcements DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_messages DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.club_applications DISABLE ROW LEVEL SECURITY;
 
 INSERT INTO public.profiles (id, club_id, role, full_name, username, password, email, phone, is_active, created_at)
 VALUES (

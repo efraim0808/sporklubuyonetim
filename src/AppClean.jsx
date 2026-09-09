@@ -8,6 +8,8 @@ const initialUsers = [];
 
 const initialClubs = [];
 
+const SUSPENDED_ACCESS_MESSAGE = 'Hesabınız askıya alınmıştır, lütfen yöneticiyle iletişime geçin';
+
 const LOCKED_SUPER_ADMIN_EMAIL = 'sagliksk@gmail.com';
 
 const lockedSuperAdminUser = {
@@ -285,6 +287,19 @@ function normalizeClubRecord(club) {
     subscriptionHistory: Array.isArray(club.subscriptionHistory) ? club.subscriptionHistory : [],
     paymentSchedule: Array.isArray(club.paymentSchedule) ? club.paymentSchedule : [],
   };
+}
+
+function isClubSuspended(clubLike) {
+  if (!clubLike || typeof clubLike !== 'object') return false;
+  return Boolean(clubLike.suspended || clubLike.is_suspended || clubLike.isSuspended);
+}
+
+function hasSuspendedClubAccess(userLike, clubsList = []) {
+  if (!userLike || isSuperAdminRole(userLike.role)) return false;
+  const clubId = normalizeDbClubId(userLike.clubId ?? userLike.club_id ?? userLike.club ?? '') || userLike.clubId || userLike.club_id || null;
+  if (!clubId) return false;
+  const clubMatch = clubsList.find((club) => club && (club.id === clubId || normalizeDbClubId(club.id) === normalizeDbClubId(clubId)));
+  return Boolean(clubMatch && isClubSuspended(clubMatch));
 }
 
 function normalizeApplicationRecord(application) {
@@ -2311,6 +2326,17 @@ function AppClean({ initialPublicClubId = null } = {}) {
       return;
     }
 
+    const clubMatch = clubs.find((club) => {
+      const clubId = match.clubId || match.club_id || null;
+      return club && (club.id === clubId || normalizeDbClubId(club.id) === normalizeDbClubId(clubId));
+    });
+
+    if (!isSuperAdminRole(match.role) && clubMatch && isClubSuspended(clubMatch)) {
+      clearLoginForm();
+      alert(SUSPENDED_ACCESS_MESSAGE);
+      return;
+    }
+
     clearLoginForm();
 
     const isSuperAdminLogin = isSuperAdminRole(match.role) || isSuperAdminRole(role);
@@ -2352,8 +2378,32 @@ function AppClean({ initialPublicClubId = null } = {}) {
     }
   };
 
-  const handleToggleClubStatus = (clubId) => {
-    setClubs((prev) => prev.map((club) => (club.id === clubId ? { ...club, suspended: !club.suspended } : club)));
+  const handleToggleClubStatus = async (clubId) => {
+    if (!clubId) return;
+
+    const currentClubRecord = getClubById(clubId);
+    const nextSuspended = !Boolean(currentClubRecord?.suspended);
+
+    setClubs((prev) => prev.map((club) => (club.id === clubId ? { ...club, suspended: nextSuspended } : club)));
+
+    try {
+      const { error } = await supabase
+        .from('clubs')
+        .update({ suspended: nextSuspended })
+        .eq('id', clubId);
+
+      if (error) {
+        throw error;
+      }
+
+      if (currentUser && (currentUser.clubId === clubId || normalizeDbClubId(currentUser.clubId) === normalizeDbClubId(clubId)) && nextSuspended) {
+        alert(SUSPENDED_ACCESS_MESSAGE);
+      }
+    } catch (error) {
+      console.error('Kulüp askıya alma işlemi başarısız:', error);
+      setClubs((prev) => prev.map((club) => (club.id === clubId ? { ...club, suspended: Boolean(currentClubRecord?.suspended) } : club)));
+      alert('Kulüp durumu güncellenemedi.');
+    }
   };
 
   const handleDeleteClub = async (clubId) => {
@@ -4855,9 +4905,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 </button>
               </div>
             </div>
-            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <table className="min-w-full divide-y divide-slate-200 text-left text-sm text-slate-700">
-                <thead className="bg-white text-slate-700">
+            <div className={`overflow-x-auto rounded-2xl border shadow-sm ${themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-slate-700 bg-slate-900'}`}>
+              <table className={`min-w-full divide-y text-left text-sm ${themeMode === 'light' ? 'divide-slate-200 text-slate-700' : 'divide-slate-700 text-slate-200'}`}>
+                <thead className={themeMode === 'light' ? 'bg-white text-slate-700' : 'bg-slate-900 text-slate-200'}>
                   <tr>
                     <th className="px-3 py-3 font-medium">Öğrenci</th>
                     <th className="px-3 py-3 font-medium">Branş</th>
@@ -4867,7 +4917,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                     <th className="px-3 py-3 font-medium">İşlem</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 bg-white">
+                <tbody className={themeMode === 'light' ? 'divide-y divide-slate-200 bg-white' : 'divide-y divide-slate-700 bg-slate-900'}>
                   {(currentClub?.students || []).filter((student) => isStudentRecordActive(student)).flatMap((student) => {
                     const studentRows = getStudentPaymentRows(currentClub, student).filter((paymentRow) => {
                       const branchMatches = reportBranchFilter === 'all' || paymentRow.branchId === reportBranchFilter;
@@ -4882,12 +4932,12 @@ function AppClean({ initialPublicClubId = null } = {}) {
                       const statusText = isPaid ? 'Ödendi' : paymentRow.status === 'Gecikti' ? 'Gecikti' : 'Bekliyor';
 
                       return (
-                        <tr key={`${student.id}-${paymentRow.branchId}`}>
-                          <td className="px-3 py-3 text-white">{student.name}</td>
-                          <td className="px-3 py-3">{paymentRow.branchName}</td>
-                          <td className="w-32 max-w-[130px] px-3 py-3 align-top">
+                        <tr key={`${student.id}-${paymentRow.branchId}`} className={themeMode === 'light' ? 'bg-white hover:bg-slate-50' : 'bg-slate-900 hover:bg-slate-800/80'}>
+                          <td className={`px-3 py-3 ${themeMode === 'light' ? 'text-slate-800' : 'text-white'}`}>{student.name}</td>
+                          <td className={`px-3 py-3 ${themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'}`}>{paymentRow.branchName}</td>
+                          <td className="w-36 max-w-[150px] px-3 py-3 align-top">
                             <select
-                              className="input-shell w-32 min-w-[110px] max-w-[120px] px-2 py-1.5 text-xs leading-tight"
+                              className={`input-shell w-36 min-w-[120px] max-w-[150px] px-2 py-1.5 text-xs leading-tight ${themeMode === 'light' ? 'bg-white text-slate-700' : 'bg-slate-950 text-slate-100'}`}
                               value={paymentRow.status}
                               onChange={(e) => handlePaymentStatusChange(student.id, paymentRow.branchId, e.target.value)}
                               aria-label={`Ödeme durumu: ${student.name}`}
@@ -4897,7 +4947,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                               <option value="Gecikti">Gecikti</option>
                             </select>
                           </td>
-                          <td className="px-3 py-3 text-white">{Number(paymentRow.amount || 0).toLocaleString('tr-TR')} ₺</td>
+                          <td className={`px-3 py-3 ${themeMode === 'light' ? 'text-slate-800' : 'text-white'}`}>{Number(paymentRow.amount || 0).toLocaleString('tr-TR')} ₺</td>
                           <td className="px-3 py-3">{formatShortDate(paymentRow.dueDate)}</td>
                           <td className="px-3 py-3">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -5847,8 +5897,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
     <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-10">
       <div className="w-full max-w-xl rounded-[28px] border border-red-500/30 bg-slate-900/80 p-8 text-center shadow-glow">
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-3xl">⚠️</div>
-        <h2 className="text-2xl font-bold text-white">Abonelik süreniz dolmuştur / Hesabınız askıya alınmıştır</h2>
-        <p className="mt-3 text-slate-300">Sistem yöneticisi tarafından kulüp hesabınız pasifleştirildi. Lütfen iletişime geçin veya yeni abonelik başlatın.</p>
+        <h2 className="text-2xl font-bold text-white">Hesabınız askıya alınmıştır</h2>
+        <p className="mt-3 text-slate-300">{SUSPENDED_ACCESS_MESSAGE}</p>
         <button className="primary-btn mt-6" onClick={handleLogout}>Çıkış Yap</button>
       </div>
     </div>
@@ -5898,6 +5948,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
         email: userRecord.email || '',
         isActive: userRecord.is_active !== false,
       };
+
+      const clubForUser = clubs.find((club) => {
+        const clubId = mappedUser.clubId;
+        return club && (club.id === clubId || normalizeDbClubId(club.id) === normalizeDbClubId(clubId));
+      });
+
+      if (!isSuperAdminRole(mappedUser.role) && clubForUser && isClubSuspended(clubForUser)) {
+        alert(SUSPENDED_ACCESS_MESSAGE);
+        return null;
+      }
 
       if (typeof window !== 'undefined') {
         try {
@@ -6033,6 +6093,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
             role: clubMatch.role || 'club-manager',
             club_id: clubMatch.id,
           }, 'club-manager');
+          if (!mappedUser) {
+            alert(SUSPENDED_ACCESS_MESSAGE);
+            return;
+          }
           console.log('Clubs tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
           return;
         }
@@ -6057,6 +6121,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
           branch_id: coachMatch.branch_id || coachMatch.branchId || null,
           is_active: coachMatch.is_active !== false,
         }, 'coach');
+
+        if (!mappedUser) {
+          alert(SUSPENDED_ACCESS_MESSAGE);
+          return;
+        }
 
         console.log('club_coaches eşleşmesi ile giriş yapıldı:', mappedUser);
         return;
@@ -6120,6 +6189,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
             role: profileMatch.role || 'parent',
             club_id: profileMatch.club_id || null,
           }, profileMatch.role || 'parent');
+          if (!mappedUser) {
+            alert(SUSPENDED_ACCESS_MESSAGE);
+            return;
+          }
           console.log('Profiles tablosu eşleşmesi ile giriş yapıldı:', mappedUser);
           return;
         }
@@ -6128,6 +6201,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const localMatchingUser = findMatchingUser(cleanedUsername, enteredPassword);
     if (localMatchingUser) {
+      const localClub = clubs.find((club) => {
+        const clubId = localMatchingUser.clubId || localMatchingUser.club_id || null;
+        return club && (club.id === clubId || normalizeDbClubId(club.id) === normalizeDbClubId(clubId));
+      });
+
+      if (!isSuperAdminRole(localMatchingUser.role) && localClub && isClubSuspended(localClub)) {
+        alert(SUSPENDED_ACCESS_MESSAGE);
+        return;
+      }
+
       console.log('Yerel eşleşme bulundu:', localMatchingUser);
       setCurrentUser(localMatchingUser);
       setActiveRole(localMatchingUser.role);
@@ -7179,8 +7262,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
   }
 
   if (currentUser.role !== 'super-admin' && currentUser.clubId) {
-    const targetClub = clubs.find((club) => club.id === currentUser.clubId);
-    if (targetClub?.suspended) {
+    const targetClub = clubs.find((club) => club.id === currentUser.clubId || normalizeDbClubId(club.id) === normalizeDbClubId(currentUser.clubId));
+    if (targetClub && isClubSuspended(targetClub)) {
       return renderBlockedAccessScreen();
     }
   }
