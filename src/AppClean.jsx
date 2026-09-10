@@ -8,9 +8,9 @@ const initialUsers = [];
 
 const initialClubs = [];
 
-const APP_CONTACT_EMAIL = 'sporkulubuyonetimsistemi@gmail.com';
+const APP_CONTACT_EMAIL = 'sporclubhub@hotmail.com';
 const GENERIC_SUSPENDED_ACCESS_MESSAGE = 'Hesabınız askıya alınmıştır';
-const CLUB_MANAGER_SUSPENDED_ACCESS_MESSAGE = 'Abonelik süreniz dolmuştur, Hesabınız askıya alınmıştır . Bilgi icin sporkulubuyonetimsistemi@gmail.com mail atınız .';
+const CLUB_MANAGER_SUSPENDED_ACCESS_MESSAGE = 'Abonelik süreniz dolmuştur, Hesabınız askıya alınmıştır . Bilgi icin sporclubhub@hotmail.com mail atınız .';
 const SUSPENDED_ACCESS_MESSAGE = GENERIC_SUSPENDED_ACCESS_MESSAGE;
 
 const LOCKED_SUPER_ADMIN_EMAIL = 'sagliksk@gmail.com';
