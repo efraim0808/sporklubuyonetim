@@ -6327,6 +6327,22 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 >
                   Giriş Yap
                 </button>
+
+                <a
+                  href="https://kulupyonetimsistemibasvuruformu.vercel.app/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group mt-2 inline-flex w-full items-center justify-center gap-3 rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3 text-sm font-semibold text-slate-100 shadow-lg shadow-slate-950/30 transition duration-200 hover:border-violet-500/60 hover:bg-slate-800 hover:text-white"
+                  aria-label="Kulüp Ön Başvuru Formu"
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-violet-300 transition group-hover:text-violet-200" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M7 7h10v10H7z" />
+                    <path d="M10 12h4" />
+                    <path d="M12 10v4" />
+                    <path d="M5 9.5V17a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9.5" />
+                  </svg>
+                  <span>Kulüp Ön Başvuru Formu</span>
+                </a>
               </div>
             </div>
           </div>
