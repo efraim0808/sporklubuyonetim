@@ -90,6 +90,23 @@ CREATE TABLE IF NOT EXISTS public.club_students (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+WITH ranked_students AS (
+  SELECT id,
+         ROW_NUMBER() OVER (
+           PARTITION BY club_id,
+                        LOWER(TRIM(full_name)),
+                        LOWER(TRIM(COALESCE(parent_name, ''))),
+                        LOWER(TRIM(COALESCE(parent_phone, ''))),
+                        birth_date
+           ORDER BY created_at ASC, id ASC
+         ) AS row_num
+  FROM public.club_students
+)
+DELETE FROM public.club_students s
+USING ranked_students r
+WHERE s.id = r.id
+  AND r.row_num > 1;
+
 CREATE TABLE IF NOT EXISTS public.club_payments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   club_id UUID NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,

@@ -56,26 +56,35 @@ function splitStudentNameParts(studentName = '', studentSurname = '') {
     };
   }
 
-  const tokens = normalizedName.split(/\s+/).filter(Boolean);
-  if (tokens.length <= 1) {
-    return {
-      studentName: tokens[0] || '',
-      studentSurname: normalizedSurname,
-    };
-  }
-
-  const firstName = tokens.shift() || '';
-  const remainingSurname = tokens.join(' ');
-
   return {
-    studentName: firstName,
-    studentSurname: normalizedSurname || remainingSurname,
+    studentName: normalizedName,
+    studentSurname: normalizedSurname,
   };
 }
 
 function composeStudentFullName(studentName = '', studentSurname = '') {
   const fullName = [String(studentName ?? '').trim(), String(studentSurname ?? '').trim()].filter(Boolean);
   return fullName.join(' ');
+}
+
+function normalizeFullStudentName(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function cleanDuplicatedStudentName(value) {
+  const normalized = normalizeFullStudentName(value);
+  if (!normalized) return '';
+
+  const parts = normalized.split(' ').filter(Boolean);
+  if (parts.length < 3) return normalized;
+
+  const lastWord = parts[parts.length - 1].toLowerCase();
+  const secondLastWord = parts[parts.length - 2].toLowerCase();
+  if (lastWord === secondLastWord) {
+    return parts.slice(0, -1).join(' ');
+  }
+
+  return normalized;
 }
 
 function toTurkishUpper(value) {
@@ -332,15 +341,15 @@ function normalizeApplicationRecord(application) {
     ''
   ).trim();
 
-  const rawStudentName = String(application.student_name ?? application.studentName ?? '').trim();
-  const rawStudentSurname = String(application.student_surname ?? application.studentSurname ?? '').trim();
-  const { studentName: derivedName, studentSurname: derivedSurname } = splitStudentNameParts(rawStudentName, rawStudentSurname);
+  const rawStudentName = normalizeFullStudentName(application.student_name ?? application.studentName ?? '');
+  const rawStudentSurname = normalizeFullStudentName(application.student_surname ?? application.studentSurname ?? '');
+  const displayStudentName = cleanDuplicatedStudentName(rawStudentSurname ? `${rawStudentName} ${rawStudentSurname}`.trim() : rawStudentName);
 
   return {
     ...application,
     id: application.id,
-    studentName: composeStudentFullName(derivedName, derivedSurname),
-    studentSurname: derivedSurname,
+    studentName: displayStudentName,
+    studentSurname: rawStudentSurname,
     parentName: application.parent_name ?? application.parentName ?? '',
     parentPhone: application.parent_phone ?? application.parentPhone ?? '',
     branchId: application.branch_id ?? application.branchId ?? '',
@@ -422,17 +431,16 @@ function normalizeStudentRecord(student) {
   const branchIds = getStudentBranchIds(student);
   const branchStatus = student.branch_status && typeof student.branch_status === 'object' ? student.branch_status : {};
 
-  const rawFullName = String(student.full_name ?? student.name ?? '').trim();
-  const rawSurname = String(student.student_surname ?? student.surname ?? '').trim();
-  const { studentName: resolvedName, studentSurname: resolvedSurname } = splitStudentNameParts(rawFullName, rawSurname);
-  const fullName = composeStudentFullName(resolvedName, resolvedSurname);
+  const rawFullName = normalizeFullStudentName(student.full_name ?? student.name ?? '');
+  const rawSurname = normalizeFullStudentName(student.student_surname ?? student.surname ?? '');
+  const fullName = cleanDuplicatedStudentName(rawSurname ? `${rawFullName} ${rawSurname}`.trim() : rawFullName);
 
   return {
     ...student,
     id: student.id,
     clubId: student.club_id ?? student.clubId ?? '',
     name: fullName || rawFullName || '',
-    surname: resolvedSurname,
+    surname: rawSurname,
     parentName: student.parent_name ?? student.parentName ?? '',
     parentPhone: student.parent_phone ?? student.parentPhone ?? '',
     branchId: student.branch_id ?? student.branchId ?? (branchIds[0] ?? ''),
@@ -550,6 +558,21 @@ async function fetchAllClubsFromSupabase() {
     const nextList = studentsByClubId[student.club_id] ?? [];
     nextList.push(normalized);
     studentsByClubId[student.club_id] = nextList;
+  });
+
+  Object.keys(studentsByClubId).forEach((clubId) => {
+    const uniqueStudents = [];
+    const seen = new Map();
+
+    for (const student of studentsByClubId[clubId]) {
+      const identity = `${normalizeFullStudentName(student.name || student.full_name || '')}|${normalizeWhatsappNumber(student.parentPhone || student.parent_phone || '')}|${String(student.birthDate || student.birth_date || '')}`;
+      if (!seen.has(identity)) {
+        seen.set(identity, true);
+        uniqueStudents.push(student);
+      }
+    }
+
+    studentsByClubId[clubId] = uniqueStudents;
   });
 
   const coachesByClubId = {};
@@ -6387,11 +6410,9 @@ function AppClean({ initialPublicClubId = null } = {}) {
   }, [showStudentDetailModal, selectedStudentDetail]);
 
   const handleSaveStudentDetail = async () => {
-    const rawStudentNameValue = String(studentDetailForm.name ?? '').trim();
-    const { studentName: resolvedStudentName, studentSurname: resolvedStudentSurname } = splitStudentNameParts(rawStudentNameValue, '');
-    const nextFullName = composeStudentFullName(resolvedStudentName, resolvedStudentSurname);
-    const nextName = nextFullName || rawStudentNameValue;
-    const nextSurname = resolvedStudentSurname;
+    const nextFullName = normalizeFullStudentName(String(studentDetailForm.name ?? '').trim());
+    const nextName = nextFullName;
+    const nextSurname = '';
     const nextParentName = studentDetailForm.parentName.trim();
     const nextParentPhone = normalizeWhatsappNumber(studentDetailForm.parentPhone);
     const nextBirthDate = studentDetailForm.birthDate || '';
@@ -6407,7 +6428,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
             ? {
                 ...student,
                 name: nextFullName || student.name || nextName,
-                surname: nextSurname || student.surname || '',
+                surname: nextSurname,
                 parentName: nextParentName || student.parentName,
                 parentPhone: nextParentPhone || student.parentPhone,
                 birthDate: nextBirthDate || student.birthDate || student.birth_date || '',
@@ -6471,7 +6492,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
         ? {
             ...prev,
             name: nextFullName || prev.name || nextName,
-            surname: nextSurname || prev.surname || '',
+            surname: nextSurname,
             parentName: nextParentName || prev.parentName,
             parentPhone: nextParentPhone || prev.parentPhone,
             birthDate: resolveStudentBirthDate({ ...prev, birthDate: nextBirthDate || prev.birthDate || prev.birth_date || '' }),
@@ -6858,7 +6879,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       }
     }
 
-    const normalizedNameParts = splitStudentNameParts(String(payload.studentName || '').trim(), String(payload.studentSurname || '').trim());
+    const normalizedStudentFullName = normalizeFullStudentName(String(payload.studentName || '').trim() || String(payload.student_name || '').trim());
     const rawApplicationPassword = String(
       payload.password ??
       payload.parentPassword ??
@@ -6870,8 +6891,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
     const fallbackPassword = rawApplicationPassword || generatePassword(12);
     const record = {
       club_id: clubId,
-      student_name: String(normalizedNameParts.studentName || '').trim(),
-      student_surname: String(normalizedNameParts.studentSurname || '').trim(),
+      student_name: normalizedStudentFullName,
+      student_surname: '',
       birth_date: payload.birthDate || null,
       parent_name: String(payload.parentName || '').trim(),
       parent_phone: String(payload.parentPhone || '').trim(),
@@ -6910,10 +6931,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const persistStudentToSupabase = async ({ clubId, name, parentName, parentPhone, branchId, birthDate, startedAt, status = 'active', skipDuplicateCheck = false }) => {
     const safeClubId = normalizeDbClubId(clubId);
     const safeBranchId = normalizeDbBranchId(branchId);
+    const safeFullName = normalizeFullStudentName(String(name || '').trim());
     const record = {
       club_id: safeClubId,
       branch_id: safeBranchId,
-      full_name: String(name || '').trim(),
+      full_name: safeFullName,
       birth_date: birthDate || null,
       parent_name: String(parentName || '').trim(),
       parent_phone: String(parentPhone || '').trim(),
