@@ -60,13 +60,16 @@ function splitStudentNameParts(studentName = '', studentSurname = '') {
   if (tokens.length <= 1) {
     return {
       studentName: tokens[0] || '',
-      studentSurname: '',
+      studentSurname: normalizedSurname,
     };
   }
 
+  const firstName = tokens.shift() || '';
+  const remainingSurname = tokens.join(' ');
+
   return {
-    studentName: tokens.shift() || '',
-    studentSurname: tokens.join(' '),
+    studentName: firstName,
+    studentSurname: normalizedSurname || remainingSurname,
   };
 }
 
@@ -329,16 +332,15 @@ function normalizeApplicationRecord(application) {
     ''
   ).trim();
 
-  const derivedStudentName = composeStudentFullName(
-    application.student_name ?? application.studentName ?? '',
-    application.student_surname ?? application.studentSurname ?? ''
-  );
+  const rawStudentName = String(application.student_name ?? application.studentName ?? '').trim();
+  const rawStudentSurname = String(application.student_surname ?? application.studentSurname ?? '').trim();
+  const { studentName: derivedName, studentSurname: derivedSurname } = splitStudentNameParts(rawStudentName, rawStudentSurname);
 
   return {
     ...application,
     id: application.id,
-    studentName: derivedStudentName,
-    studentSurname: application.student_surname ?? application.studentSurname ?? '',
+    studentName: composeStudentFullName(derivedName, derivedSurname),
+    studentSurname: derivedSurname,
     parentName: application.parent_name ?? application.parentName ?? '',
     parentPhone: application.parent_phone ?? application.parentPhone ?? '',
     branchId: application.branch_id ?? application.branchId ?? '',
@@ -420,17 +422,17 @@ function normalizeStudentRecord(student) {
   const branchIds = getStudentBranchIds(student);
   const branchStatus = student.branch_status && typeof student.branch_status === 'object' ? student.branch_status : {};
 
-  const fullName = composeStudentFullName(
-    student.full_name ?? student.name ?? '',
-    student.student_surname ?? student.surname ?? ''
-  );
+  const rawFullName = String(student.full_name ?? student.name ?? '').trim();
+  const rawSurname = String(student.student_surname ?? student.surname ?? '').trim();
+  const { studentName: resolvedName, studentSurname: resolvedSurname } = splitStudentNameParts(rawFullName, rawSurname);
+  const fullName = composeStudentFullName(resolvedName, resolvedSurname);
 
   return {
     ...student,
     id: student.id,
     clubId: student.club_id ?? student.clubId ?? '',
-    name: fullName || student.full_name || student.name || '',
-    surname: student.student_surname ?? student.surname ?? '',
+    name: fullName || rawFullName || '',
+    surname: resolvedSurname,
     parentName: student.parent_name ?? student.parentName ?? '',
     parentPhone: student.parent_phone ?? student.parentPhone ?? '',
     branchId: student.branch_id ?? student.branchId ?? (branchIds[0] ?? ''),
@@ -6386,7 +6388,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
   }, [showStudentDetailModal, selectedStudentDetail]);
 
   const handleSaveStudentDetail = async () => {
-    const nextName = studentDetailForm.name.trim();
+    const rawStudentNameValue = String(studentDetailForm.name ?? '').trim();
+    const { studentName: resolvedStudentName, studentSurname: resolvedStudentSurname } = splitStudentNameParts(rawStudentNameValue, '');
+    const nextFullName = composeStudentFullName(resolvedStudentName, resolvedStudentSurname);
+    const nextName = nextFullName || rawStudentNameValue;
+    const nextSurname = resolvedStudentSurname;
     const nextParentName = studentDetailForm.parentName.trim();
     const nextParentPhone = normalizeWhatsappNumber(studentDetailForm.parentPhone);
     const nextBirthDate = studentDetailForm.birthDate || '';
@@ -6401,7 +6407,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
           student.id === studentDetailForm.studentId
             ? {
                 ...student,
-                name: nextName || student.name,
+                name: nextFullName || student.name || nextName,
+                surname: nextSurname || student.surname || '',
                 parentName: nextParentName || student.parentName,
                 parentPhone: nextParentPhone || student.parentPhone,
                 birthDate: nextBirthDate || student.birthDate || student.birth_date || '',
@@ -6464,7 +6471,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
       prev && prev.id === studentDetailForm.studentId
         ? {
             ...prev,
-            name: nextName || prev.name,
+            name: nextFullName || prev.name || nextName,
+            surname: nextSurname || prev.surname || '',
             parentName: nextParentName || prev.parentName,
             parentPhone: nextParentPhone || prev.parentPhone,
             birthDate: resolveStudentBirthDate({ ...prev, birthDate: nextBirthDate || prev.birthDate || prev.birth_date || '' }),
@@ -6477,6 +6485,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       const { error } = await supabase
         .from('club_students')
         .update({
+          full_name: nextFullName || nextName,
           birth_date: nextBirthDate || null,
           started_at: nextStartedAt || null,
         })
