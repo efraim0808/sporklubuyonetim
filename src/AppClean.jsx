@@ -70,6 +70,11 @@ function splitStudentNameParts(studentName = '', studentSurname = '') {
   };
 }
 
+function composeStudentFullName(studentName = '', studentSurname = '') {
+  const fullName = [String(studentName ?? '').trim(), String(studentSurname ?? '').trim()].filter(Boolean);
+  return fullName.join(' ');
+}
+
 function toTurkishUpper(value) {
   return String(value ?? '').toLocaleUpperCase('tr-TR');
 }
@@ -324,10 +329,15 @@ function normalizeApplicationRecord(application) {
     ''
   ).trim();
 
+  const derivedStudentName = composeStudentFullName(
+    application.student_name ?? application.studentName ?? '',
+    application.student_surname ?? application.studentSurname ?? ''
+  );
+
   return {
     ...application,
     id: application.id,
-    studentName: application.student_name ?? application.studentName ?? '',
+    studentName: derivedStudentName,
     studentSurname: application.student_surname ?? application.studentSurname ?? '',
     parentName: application.parent_name ?? application.parentName ?? '',
     parentPhone: application.parent_phone ?? application.parentPhone ?? '',
@@ -410,11 +420,17 @@ function normalizeStudentRecord(student) {
   const branchIds = getStudentBranchIds(student);
   const branchStatus = student.branch_status && typeof student.branch_status === 'object' ? student.branch_status : {};
 
+  const fullName = composeStudentFullName(
+    student.full_name ?? student.name ?? '',
+    student.student_surname ?? student.surname ?? ''
+  );
+
   return {
     ...student,
     id: student.id,
     clubId: student.club_id ?? student.clubId ?? '',
-    name: student.full_name ?? student.name ?? '',
+    name: fullName || student.full_name || student.name || '',
+    surname: student.student_surname ?? student.surname ?? '',
     parentName: student.parent_name ?? student.parentName ?? '',
     parentPhone: student.parent_phone ?? student.parentPhone ?? '',
     branchId: student.branch_id ?? student.branchId ?? (branchIds[0] ?? ''),
@@ -2936,7 +2952,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const insertStudentPayload = {
       clubId: resolvedClubId,
-      name: application.studentName,
+      name: composeStudentFullName(application.studentName, application.studentSurname),
       parentName: application.parentName,
       parentPhone: application.parentPhone,
       branchId: application.branchId,
@@ -3029,7 +3045,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     const newStudent = {
       id: generatedStudentId,
-      name: application.studentName,
+      name: composeStudentFullName(application.studentName, application.studentSurname),
       parentName: application.parentName,
       parentPhone: application.parentPhone,
       branchId: application.branchId,
@@ -4304,16 +4320,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <input
-                  className="input-shell"
-                  placeholder="Öğrenci Adı"
-                  value={applicationForm.studentName}
-                  onChange={(e) => setApplicationForm({ ...applicationForm, studentName: toTurkishUpper(e.target.value) })}
-                />
-                <input
-                  className="input-shell"
-                  placeholder="Öğrenci Soyadı"
-                  value={applicationForm.studentSurname}
-                  onChange={(e) => setApplicationForm({ ...applicationForm, studentSurname: toTurkishUpper(e.target.value) })}
+                  className="input-shell md:col-span-2"
+                  placeholder="Öğrenci Adı Soyadı"
+                  value={composeStudentFullName(applicationForm.studentName, applicationForm.studentSurname)}
+                  onChange={(e) => {
+                    const fullName = toTurkishUpper(e.target.value);
+                    const { studentName, studentSurname } = splitStudentNameParts(fullName, '');
+                    setApplicationForm({ ...applicationForm, studentName, studentSurname });
+                  }}
                 />
                 <label className="space-y-2 text-sm text-slate-300">
                   <span className="block text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Öğrenci Doğum Tarihi</span>
@@ -6363,7 +6377,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
     setStudentDetailForm({
       studentId: selectedStudentDetail.id ?? '',
-      name: selectedStudentDetail.name ?? '',
+      name: composeStudentFullName(selectedStudentDetail.name, selectedStudentDetail.surname || selectedStudentDetail.studentSurname || ''),
       parentName: selectedStudentDetail.parentName ?? '',
       parentPhone: selectedStudentDetail.parentPhone ?? '',
       birthDate: resolveStudentBirthDate(selectedStudentDetail),
@@ -7090,16 +7104,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
           <div className="grid gap-5 md:grid-cols-2">
           <input className="input-shell" placeholder="Kulüp" value={formClub?.name} disabled />
           <input
-            className="input-shell"
-            placeholder="Öğrenci Adı"
-            value={applicationForm.studentName}
-            onChange={(e) => setApplicationForm({ ...applicationForm, studentName: toTurkishUpper(e.target.value) })}
-          />
-          <input
-            className="input-shell"
-            placeholder="Öğrenci Soyadı"
-            value={applicationForm.studentSurname}
-            onChange={(e) => setApplicationForm({ ...applicationForm, studentSurname: toTurkishUpper(e.target.value) })}
+            className="input-shell md:col-span-2"
+            placeholder="Öğrenci Adı Soyadı"
+            value={composeStudentFullName(applicationForm.studentName, applicationForm.studentSurname)}
+            onChange={(e) => {
+              const fullName = toTurkishUpper(e.target.value);
+              const { studentName, studentSurname } = splitStudentNameParts(fullName, '');
+              setApplicationForm({ ...applicationForm, studentName, studentSurname });
+            }}
           />
           <label className="space-y-2 text-sm text-slate-300">
             <span className="block text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Öğrenci Doğum Tarihi</span>
