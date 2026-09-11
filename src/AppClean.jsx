@@ -3202,6 +3202,104 @@ function AppClean({ initialPublicClubId = null } = {}) {
     setToastMessage('Branş öğrencinin listesine eklendi.');
   };
 
+  const handleRemoveStudentFromBranch = async (studentId, branchId) => {
+    if (!studentId || !branchId) return;
+
+    const targetStudent = (currentClub?.students ?? []).find((student) => student.id === studentId);
+    if (!targetStudent) return;
+
+    const branchName = (currentClub?.branches ?? []).find((branch) => branch.id === branchId)?.name || 'Branş';
+    const confirmed = window.confirm(`${branchName} branşından öğrenciyi çıkarmak istediğinize emin misiniz?`);
+    if (!confirmed) return;
+
+    const nextBranchIds = getStudentBranchIds(targetStudent).filter((id) => String(id).trim() !== String(branchId).trim());
+    const nextBranchStatus = { ...(targetStudent.branchStatus || {}) };
+    delete nextBranchStatus[branchId];
+
+    const nextPrimaryBranchId = nextBranchIds[0] ?? '';
+    const normalizedStatus = nextBranchIds.length ? (targetStudent.status === 'passive' ? 'passive' : 'active') : 'passive';
+
+    setClubs((prev) =>
+      prev.map((club) => (
+        club.id === currentClub?.id
+          ? {
+              ...club,
+              students: (club.students ?? []).map((student) => {
+                if (student.id !== studentId) return student;
+                return {
+                  ...student,
+                  branchId: nextPrimaryBranchId,
+                  branch_ids: nextBranchIds,
+                  branchIds: nextBranchIds,
+                  branch_id: nextPrimaryBranchId || null,
+                  branchStatus: nextBranchStatus,
+                  status: normalizedStatus,
+                };
+              }),
+            }
+          : club
+      ))
+    );
+
+    try {
+      const { error } = await supabase
+        .from('club_students')
+        .update({
+          branch_id: nextPrimaryBranchId || null,
+          branch_ids: nextBranchIds,
+          branch_status: nextBranchStatus,
+          status: normalizedStatus,
+        })
+        .eq('id', studentId);
+
+      if (error) throw error;
+      setToastMessage('Öğrenci branştan çıkarıldı.');
+    } catch (error) {
+      console.error('Student branch removal failed:', error);
+      alert('Öğrenci branştan çıkarılamadı.');
+    }
+  };
+
+  const handleDeleteStudent = async (studentId, studentName = 'Bu öğrenci') => {
+    if (!studentId) return;
+
+    const confirmed = window.confirm(`${studentName} için bu öğrenciyi ve tüm verilerini kalıcı olarak silmek istediğinize emin misiniz?\n\nBu işlem geri alınamaz.`);
+    if (!confirmed) return;
+
+    try {
+      const { error } = await supabase
+        .from('club_students')
+        .delete()
+        .eq('id', studentId);
+
+      if (error) throw error;
+
+      setClubs((prev) =>
+        prev.map((club) =>
+          club.id === currentClub?.id
+            ? {
+                ...club,
+                students: (club.students ?? []).filter((student) => student.id !== studentId),
+                payments: (club.payments ?? []).filter((payment) => payment.studentId !== studentId),
+              }
+            : club
+        )
+      );
+
+      setUsers((prev) =>
+        prev.filter((user) => !(user.clubId === currentClub?.id && user.childStudentId === studentId))
+      );
+
+      setSelectedStudentDetail(null);
+      setShowStudentDetailModal(false);
+      setManagerSelectedStudentId('');
+      setToastMessage('Öğrenci kalıcı olarak silindi.');
+    } catch (error) {
+      console.error('Student deletion failed:', error);
+      alert('Öğrenci silinemedi.');
+    }
+  };
+
   const handleStudentStatusToggle = (studentId, branchId, nextStatus) => {
     setClubs((prev) =>
       prev.map((club) => ({
@@ -4859,6 +4957,16 @@ function AppClean({ initialPublicClubId = null } = {}) {
                           </select>
                           <button type="button" className="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-left text-xs text-slate-300" onClick={() => setAttendanceCalendar({ studentId: selectedManagerStudent.id, month: attendanceCalendar.month })}>
                             Katılım: <span className="text-white">{presentCount}</span> / Devamsızlık: <span className="text-red-300">{absentCount}</span>
+                          </button>
+                        </div>
+
+                        <div className="mb-3 flex flex-wrap justify-end gap-2">
+                          <button
+                            type="button"
+                            className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-200 transition hover:bg-red-500/20"
+                            onClick={() => handleRemoveStudentFromBranch(selectedManagerStudent.id, branchId)}
+                          >
+                            Branştan Çıkar
                           </button>
                         </div>
 
@@ -6580,7 +6688,14 @@ function AppClean({ initialPublicClubId = null } = {}) {
             </label>
           </div>
 
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
+            <button
+              type="button"
+              className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-200 transition hover:bg-red-500/20"
+              onClick={() => handleDeleteStudent(selectedStudentDetail?.id, selectedStudentDetail?.name || 'Bu öğrenci')}
+            >
+              🗑 Sil
+            </button>
             <button className="secondary-btn" onClick={() => setShowStudentDetailModal(false)}>İptal</button>
             <button className="primary-btn" onClick={handleSaveStudentDetail}>Kaydet</button>
           </div>
