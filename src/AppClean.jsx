@@ -4324,11 +4324,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 <input
                   className="input-shell md:col-span-2"
                   placeholder="Öğrenci Adı Soyadı"
-                  value={composeStudentFullName(applicationForm.studentName, applicationForm.studentSurname)}
+                  value={applicationForm.studentName}
                   onChange={(e) => {
-                    const fullName = toTurkishUpper(e.target.value);
-                    const { studentName, studentSurname } = splitStudentNameParts(fullName, '');
-                    setApplicationForm({ ...applicationForm, studentName, studentSurname });
+                    const nextValue = toTurkishUpper(e.target.value);
+                    setApplicationForm({ ...applicationForm, studentName: nextValue, studentSurname: '' });
                   }}
                 />
                 <label className="space-y-2 text-sm text-slate-300">
@@ -7115,11 +7114,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
           <input
             className="input-shell md:col-span-2"
             placeholder="Öğrenci Adı Soyadı"
-            value={composeStudentFullName(applicationForm.studentName, applicationForm.studentSurname)}
+            value={applicationForm.studentName}
             onChange={(e) => {
-              const fullName = toTurkishUpper(e.target.value);
-              const { studentName, studentSurname } = splitStudentNameParts(fullName, '');
-              setApplicationForm({ ...applicationForm, studentName, studentSurname });
+              const nextValue = toTurkishUpper(e.target.value);
+              setApplicationForm({ ...applicationForm, studentName: nextValue, studentSurname: '' });
             }}
           />
           <label className="space-y-2 text-sm text-slate-300">
