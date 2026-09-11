@@ -332,6 +332,8 @@ function normalizeApplicationRecord(application) {
     parentName: application.parent_name ?? application.parentName ?? '',
     parentPhone: application.parent_phone ?? application.parentPhone ?? '',
     branchId: application.branch_id ?? application.branchId ?? '',
+    birthDate: application.birth_date ?? application.birthDate ?? '',
+    startedAt: application.started_at ?? application.startedAt ?? '',
     password: resolvedPassword,
     parentPassword: resolvedPassword,
     status: application.status ?? 'pending',
