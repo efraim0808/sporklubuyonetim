@@ -36,7 +36,6 @@ const defaultForm = {
   parentPassword: '',
   notes: '',
   acceptKvkk: false,
-  acceptPolicy: false,
 };
 
 function splitStudentNameParts(studentName = '', studentSurname = '') {
@@ -396,6 +395,13 @@ function safeCoachIdList(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function resolveStudentBirthDate(studentLike) {
+  if (!studentLike || typeof studentLike !== 'object') return '';
+
+  const candidate = studentLike.birthDate ?? studentLike.birth_date ?? studentLike.birthday ?? studentLike.dogumTarihi ?? '';
+  return String(candidate ?? '').trim();
+}
+
 function normalizeStudentRecord(student) {
   if (!student || typeof student !== 'object') return null;
 
@@ -414,7 +420,7 @@ function normalizeStudentRecord(student) {
     status: student.status ?? 'active',
     branchStatus,
     attendance: Array.isArray(student.attendance) ? student.attendance : [],
-    birthDate: student.birth_date ?? student.birthDate ?? '',
+    birthDate: resolveStudentBirthDate(student),
     startedAt: student.started_at ?? student.startedAt ?? '',
     createdAt: student.created_at ?? student.createdAt ?? new Date().toISOString(),
   };
@@ -4354,10 +4360,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
                   <button type="button" className="text-left text-violet-300 underline decoration-violet-500/60 underline-offset-2" onClick={() => setShowKvkkModal(true)}>KVKK Aydınlatma Metni</button>
                   <span>ve veri kullanımını okudum ve onaylıyorum.</span>
                 </label>
-                <label className="mt-3 flex cursor-pointer items-center gap-3 text-sm text-slate-300">
-                  <input type="checkbox" checked={applicationForm.acceptPolicy} onChange={(e) => setApplicationForm({ ...applicationForm, acceptPolicy: e.target.checked })} />
-                  Sağlık raporu / muvafakatname dosyası yüklemeyi kabul ediyorum.
-                </label>
               </div>
 
               <textarea
@@ -4371,8 +4373,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
                 <button
                   className="primary-btn"
                   onClick={async () => {
-                    if (!applicationForm.acceptKvkk || !applicationForm.acceptPolicy) {
-                      alert('KVKK ve muvafakat onayı gereklidir.');
+                    if (!applicationForm.acceptKvkk) {
+                      alert('KVKK aydınlatma metni onayı gereklidir.');
                       return;
                     }
 
@@ -6362,7 +6364,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
       name: selectedStudentDetail.name ?? '',
       parentName: selectedStudentDetail.parentName ?? '',
       parentPhone: selectedStudentDetail.parentPhone ?? '',
-      birthDate: selectedStudentDetail.birthDate ?? selectedStudentDetail.birth_date ?? '',
+      birthDate: resolveStudentBirthDate(selectedStudentDetail),
       startedAt: selectedStudentDetail.startedAt ?? selectedStudentDetail.enrollmentDate ?? '',
     });
   }, [showStudentDetailModal, selectedStudentDetail]);
@@ -6449,7 +6451,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
             name: nextName || prev.name,
             parentName: nextParentName || prev.parentName,
             parentPhone: nextParentPhone || prev.parentPhone,
-            birthDate: nextBirthDate || prev.birthDate || prev.birth_date || '',
+            birthDate: resolveStudentBirthDate({ ...prev, birthDate: nextBirthDate || prev.birthDate || prev.birth_date || '' }),
             startedAt: nextStartedAt || prev.startedAt || '',
           }
         : prev
@@ -7140,10 +7142,6 @@ function AppClean({ initialPublicClubId = null } = {}) {
             <button type="button" className="text-left text-violet-300 underline decoration-violet-500/60 underline-offset-2" onClick={() => setShowKvkkModal(true)}>KVKK Aydınlatma Metni</button>
             <span>ve veri kullanımını okudum ve onaylıyorum.</span>
           </label>
-          <label className="mt-3 flex cursor-pointer items-center gap-3 text-sm text-slate-300">
-            <input type="checkbox" checked={applicationForm.acceptPolicy} onChange={(e) => setApplicationForm({ ...applicationForm, acceptPolicy: e.target.checked })} />
-            Sağlık raporu / muvafakatname dosyası yüklemeyi kabul ediyorum.
-          </label>
         </div>
 
         <textarea className="input-shell mt-5 min-h-28" placeholder="Not ekleyebilirsiniz" value={applicationForm.notes} onChange={(e) => setApplicationForm({ ...applicationForm, notes: e.target.value })} />
@@ -7151,8 +7149,8 @@ function AppClean({ initialPublicClubId = null } = {}) {
         <button
           className="primary-btn mt-6 w-full"
           onClick={async () => {
-            if (!applicationForm.acceptKvkk || !applicationForm.acceptPolicy) {
-              alert('KVKK ve muvafakat onayı gereklidir.');
+            if (!applicationForm.acceptKvkk) {
+              alert('KVKK aydınlatma metni onayı gereklidir.');
               return;
             }
 
