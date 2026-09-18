@@ -3162,44 +3162,70 @@ function AppClean({ initialPublicClubId = null } = {}) {
     setToastMessage('Kayıt başarıyla alındı!');
   };
 
-  const handleAssignStudentToBranch = (studentId, branchId) => {
+  const handleAssignStudentToBranch = async (studentId, branchId) => {
     if (!studentId || !branchId) return;
+
+    const targetStudent = (clubs.flatMap((club) => club.students ?? [])).find((student) => String(student.id) === String(studentId));
+    const existingBranchIds = getStudentBranchIds(targetStudent ?? { branchIds: [] }).filter(Boolean);
+
+    if (existingBranchIds.includes(String(branchId).trim())) {
+      setStudentBranchAddValue('');
+      return;
+    }
+
+    const nextBranchIds = [...existingBranchIds, String(branchId).trim()];
+    const nextBranchStatus = {
+      ...(targetStudent?.branchStatus || {}),
+      [String(branchId).trim()]: targetStudent?.branchStatus?.[branchId] ?? 'active',
+    };
+    const nextPrimaryBranchId = String(targetStudent?.branchId || targetStudent?.branch_id || branchId || '').trim();
+    const nextStatus = targetStudent?.status === 'passive' ? 'passive' : 'active';
 
     setClubs((prev) =>
       prev.map((club) => ({
         ...club,
-        students: club.students.map((student) => {
-          if (student.id !== studentId) return student;
-
-          const existingBranchIds = Array.isArray(student.branchIds) && student.branchIds.length
-            ? student.branchIds.filter(Boolean)
-            : student.branchId
-              ? [student.branchId]
-              : [];
-
-          if (existingBranchIds.includes(branchId)) {
-            return student;
-          }
-
-          const nextBranchIds = [...existingBranchIds, branchId];
-          const nextBranchStatus = {
-            ...(student.branchStatus || {}),
-            [branchId]: student.branchStatus?.[branchId] ?? 'active',
-          };
+        students: (club.students ?? []).map((student) => {
+          if (String(student.id) !== String(studentId)) return student;
 
           return {
             ...student,
-            branchId: student.branchId || branchId,
+            branchId: student.branchId || nextPrimaryBranchId || branchId,
+            branch_id: student.branch_id || nextPrimaryBranchId || branchId,
             branchIds: nextBranchIds,
+            branch_ids: nextBranchIds,
             branchStatus: nextBranchStatus,
-            status: student.status === 'passive' ? 'passive' : 'active',
+            branch_status: nextBranchStatus,
+            status: nextStatus,
           };
         }),
       }))
     );
 
     setStudentBranchAddValue('');
-    setToastMessage('Branş öğrencinin listesine eklendi.');
+
+    if (!supabase || !supabase.from) {
+      setToastMessage('Branş öğrencinin listesine eklendi.');
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('club_students')
+        .update({
+          branch_id: nextPrimaryBranchId || branchId || null,
+          branch_ids: nextBranchIds,
+          branch_status: nextBranchStatus,
+          status: nextStatus,
+        })
+        .eq('id', studentId);
+
+      if (error) throw error;
+      setToastMessage('Branş öğrencinin listesine eklendi.');
+    } catch (error) {
+      console.error('Student branch assignment failed:', error);
+      setToastMessage('Branş kaydı veritabanına yazılamadı.');
+      window.alert('Öğrenci branşı veritabanına kaydedilemedi.');
+    }
   };
 
   const handleRemoveStudentFromBranch = async (studentId, branchId) => {
