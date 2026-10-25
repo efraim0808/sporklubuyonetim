@@ -115,8 +115,12 @@ CREATE TABLE IF NOT EXISTS public.club_payments (
   amount NUMERIC(10,2) NOT NULL DEFAULT 0,
   due_date DATE,
   status TEXT NOT NULL DEFAULT 'Ödenmedi',
+  paid_at DATE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.club_payments
+  ADD COLUMN IF NOT EXISTS paid_at DATE;
 
 CREATE TABLE IF NOT EXISTS public.club_announcements (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

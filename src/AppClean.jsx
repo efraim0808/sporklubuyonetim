@@ -399,6 +399,28 @@ function normalizeNotificationRecord(notification) {
   };
 }
 
+function normalizePaymentRecord(payment) {
+  if (!payment || typeof payment !== 'object') return null;
+
+  const dueDate = payment.due_date ?? payment.dueDate ?? '';
+  return {
+    ...payment,
+    id: payment.id,
+    clubId: payment.club_id ?? payment.clubId ?? '',
+    studentId: payment.student_id ?? payment.studentId ?? '',
+    branchId: payment.branch_id ?? payment.branchId ?? '',
+    amount: Number(payment.amount ?? 0),
+    dueDate,
+    month: payment.month ?? payment.month_label ?? (
+      dueDate
+        ? new Date(`${String(dueDate).slice(0, 10)}T00:00:00`).toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase())
+        : ''
+    ),
+    status: payment.status ?? 'Bekliyor',
+    paidAt: payment.paid_at ?? payment.paidAt ?? '',
+  };
+}
+
 function normalizeCoachIdList(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => item !== null && item !== undefined && item !== '');
@@ -489,7 +511,7 @@ async function fetchAllClubsFromSupabase() {
 
   const clubIds = (clubsData ?? []).map((club) => club.id).filter(Boolean);
 
-  const [{ data: branchRows, error: branchError }, { data: applicationRows, error: applicationError }, { data: messageRows, error: messageError }, { data: notificationRows, error: notificationError }, { data: studentRows, error: studentError }, { data: coachRows, error: coachError }] = await Promise.all([
+  const [{ data: branchRows, error: branchError }, { data: applicationRows, error: applicationError }, { data: messageRows, error: messageError }, { data: notificationRows, error: notificationError }, { data: studentRows, error: studentError }, { data: coachRows, error: coachError }, { data: paymentRows, error: paymentError }] = await Promise.all([
     clubIds.length
       ? supabase.from('club_branches').select('*').in('club_id', clubIds)
       : Promise.resolve({ data: [], error: null }),
@@ -507,6 +529,9 @@ async function fetchAllClubsFromSupabase() {
       : Promise.resolve({ data: [], error: null }),
     clubIds.length
       ? supabase.from('club_coaches').select('*').in('club_id', clubIds).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    clubIds.length
+      ? supabase.from('club_payments').select('*').in('club_id', clubIds).order('due_date', { ascending: false })
       : Promise.resolve({ data: [], error: null }),
   ]);
 
@@ -532,6 +557,10 @@ async function fetchAllClubsFromSupabase() {
 
   if (coachError) {
     console.error('Supabase club_coaches fetch failed:', coachError);
+  }
+
+  if (paymentError) {
+    console.error('Supabase club_payments fetch failed:', paymentError);
   }
 
   const branchesByClubId = {};
@@ -616,6 +645,16 @@ async function fetchAllClubsFromSupabase() {
     notificationsByClubId[notification.club_id] = nextList;
   });
 
+  const paymentsByClubId = {};
+  (paymentRows ?? []).forEach((payment) => {
+    if (!payment?.club_id) return;
+    const normalized = normalizePaymentRecord(payment);
+    if (!normalized) return;
+    const nextList = paymentsByClubId[payment.club_id] ?? [];
+    nextList.push(normalized);
+    paymentsByClubId[payment.club_id] = nextList;
+  });
+
   return (clubsData ?? [])
     .map((club) => {
       const normalized = normalizeClubRecord(club);
@@ -646,6 +685,7 @@ async function fetchAllClubsFromSupabase() {
         pendingApplications: applicationsByClubId[club.id] ?? [],
         incomingMessages: messagesByClubId[club.id] ?? [],
         notifications: notificationsByClubId[club.id] ?? [],
+        payments: paymentsByClubId[club.id] ?? [],
       };
     })
     .filter(Boolean);
@@ -941,6 +981,13 @@ function formatShortDate(dateString) {
   const parsed = new Date(dateString);
   if (Number.isNaN(parsed.getTime())) return dateString;
   return parsed.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function getLocalDateInputValue(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function addMonthsToDate(dateValue, monthCount) {
@@ -1427,6 +1474,10 @@ function AppClean({ initialPublicClubId = null } = {}) {
   const [reportBranchFilter, setReportBranchFilter] = useState('all');
   const [paymentMonthFilter, setPaymentMonthFilter] = useState('all');
   const [paymentYearFilter, setPaymentYearFilter] = useState('all');
+  const [paymentConfirmation, setPaymentConfirmation] = useState(null);
+  const [paymentHistoryStudentId, setPaymentHistoryStudentId] = useState(null);
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const paymentSaveLock = useRef(false);
   const [studentAttendanceMonthFilter, setStudentAttendanceMonthFilter] = useState('all');
   const [studentAttendanceYearFilter, setStudentAttendanceYearFilter] = useState('all');
   const [managerSelectedBranchId, setManagerSelectedBranchId] = useState('');
@@ -3486,70 +3537,162 @@ function AppClean({ initialPublicClubId = null } = {}) {
   };
 
   const handlePaymentStatusChange = (studentId, branchId, nextStatus) => {
-    setClubs((prev) =>
-      prev.map((club) => {
-        if (club.id !== selectedClubId) return club;
-
-        const existingPayment = (club.payments || []).find(
-          (payment) => payment.studentId === studentId && payment.branchId === branchId
-        );
-
-        const student = (club.students || []).find((item) => item.id === studentId);
-        const branch = club.branches?.find((item) => item.id === branchId);
-        const baseDueDate = existingPayment?.dueDate || computeDueDateFromStartedAt(student?.startedAt ?? student?.started_at) || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5).toISOString().slice(0, 10);
-        const baseAmount = Number(existingPayment?.amount ?? branch?.monthlyFee ?? branch?.fee ?? 0);
-
-        const updatedPayments = (club.payments || []).map((payment) =>
-          payment.id === existingPayment?.id ? { ...payment, status: nextStatus, dueDate: baseDueDate, amount: baseAmount } : payment
-        );
-
-        let nextPayments = updatedPayments;
-
-        if (nextStatus === 'Ödendi') {
-          const nextPayment = buildNextMonthPaymentRecord({
-            studentId,
-            branchId,
-            dueDate: baseDueDate,
-            amount: baseAmount,
-          });
-
-          const alreadyHasNextPayment = (nextPayments || []).some(
-            (payment) => payment.studentId === studentId && payment.branchId === branchId && payment.dueDate === nextPayment?.dueDate
-          );
-
-          if (nextPayment && !alreadyHasNextPayment) {
-            nextPayments = [...nextPayments, nextPayment];
-          }
-        }
-
-        if (!existingPayment) {
-          const monthLabel = new Date().toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).replace(/^./, (char) => char.toUpperCase());
-
-          return {
-            ...club,
-            payments: [
-              ...nextPayments,
-              {
-                id: `pay-${Date.now()}`,
-                studentId,
-                branchId,
-                month: monthLabel,
-                amount: Number(branch?.monthlyFee ?? branch?.fee ?? 0),
-                status: nextStatus,
-                dueDate: baseDueDate,
-              },
-            ],
-          };
-        }
-
-        return {
-          ...club,
-          payments: nextPayments,
-        };
-      })
+    if (paymentSaveLock.current) return;
+    const existingPayment = (currentClub?.payments || []).find(
+      (payment) => payment.studentId === studentId && payment.branchId === branchId
     );
+    const student = (currentClub?.students || []).find((item) => item.id === studentId);
+    const branch = currentClub?.branches?.find((item) => item.id === branchId);
+    const baseDueDate = existingPayment?.dueDate || computeDueDateFromStartedAt(student?.startedAt ?? student?.started_at) || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5).toISOString().slice(0, 10);
+    const baseAmount = Number(existingPayment?.amount ?? branch?.monthlyFee ?? branch?.fee ?? 0);
 
-    setToastMessage(nextStatus === 'Ödendi' ? 'Ödeme durumu ödendi olarak güncellendi. Bir sonraki ayın aidatı otomatik eklendi.' : 'Ödeme durumu güncellendi.');
+    if (nextStatus === 'Ödendi') {
+      setPaymentConfirmation({
+        studentId,
+        branchId,
+        paymentId: existingPayment?.id ?? null,
+        dueDate: baseDueDate,
+        amount: baseAmount,
+        paidAt: getLocalDateInputValue(),
+      });
+      return;
+    }
+
+    void runPaymentStatusSave({
+      studentId,
+      branchId,
+      paymentId: existingPayment?.id ?? null,
+      dueDate: baseDueDate,
+      amount: baseAmount,
+      status: nextStatus,
+      paidAt: null,
+    });
+  };
+
+  const savePaymentStatus = async ({ studentId, branchId, paymentId, dueDate, amount, status, paidAt }) => {
+    const clubId = normalizeDbClubId(currentClub?.id);
+    const dbStudentId = normalizeDbStudentId(studentId);
+    const dbBranchId = normalizeDbBranchId(branchId);
+    if (!supabase?.from || !clubId || !dbStudentId || !dbBranchId) {
+      alert('Ödeme veritabanına kaydedilemedi. Kulüp, öğrenci veya branş kaydı geçerli değil.');
+      return false;
+    }
+
+    const payload = {
+      club_id: clubId,
+      student_id: dbStudentId,
+      branch_id: dbBranchId,
+      amount: Number(amount ?? 0),
+      due_date: String(dueDate).slice(0, 10),
+      status,
+      paid_at: status === 'Ödendi' ? paidAt : null,
+    };
+
+    let savedPayment;
+    if (isValidUuid(String(paymentId ?? ''))) {
+      const { data, error } = await supabase
+        .from('club_payments')
+        .update({ status: payload.status, paid_at: payload.paid_at })
+        .eq('id', paymentId)
+        .select('*')
+        .maybeSingle();
+      if (error || !data) {
+        console.error('Supabase club_payments update failed:', error);
+        alert('Ödeme durumu veritabanında güncellenemedi. Lütfen tekrar deneyin.');
+        return false;
+      }
+      savedPayment = data;
+    } else {
+      const { data, error } = await supabase
+        .from('club_payments')
+        .insert([payload])
+        .select('*')
+        .single();
+      if (error || !data) {
+        console.error('Supabase club_payments insert failed:', error);
+        alert('Ödeme kaydı veritabanına eklenemedi. Lütfen tekrar deneyin.');
+        return false;
+      }
+      savedPayment = data;
+    }
+
+    const normalizedPayment = normalizePaymentRecord(savedPayment);
+    setClubs((prev) => prev.map((club) => {
+      if (club.id !== currentClub?.id) return club;
+      const existingIndex = (club.payments || []).findIndex((payment) => payment.id === normalizedPayment.id || (
+        payment.studentId === studentId && payment.branchId === branchId && payment.dueDate === dueDate
+      ));
+      const nextPayments = [...(club.payments || [])];
+      if (existingIndex >= 0) nextPayments[existingIndex] = normalizedPayment;
+      else nextPayments.push(normalizedPayment);
+      return { ...club, payments: nextPayments };
+    }));
+
+    if (status === 'Ödendi') {
+      const nextPayment = buildNextMonthPaymentRecord({ studentId, branchId, dueDate, amount });
+      const hasNextPayment = (currentClub?.payments || []).some(
+        (payment) => payment.studentId === studentId && payment.branchId === branchId && payment.dueDate === nextPayment?.dueDate
+      );
+      let nextPaymentCreated = hasNextPayment;
+      if (nextPayment && !hasNextPayment) {
+        const { data: nextPaymentData, error: nextPaymentError } = await supabase
+          .from('club_payments')
+          .insert([{
+            club_id: clubId,
+            student_id: dbStudentId,
+            branch_id: dbBranchId,
+            amount: Number(amount ?? 0),
+            due_date: nextPayment.dueDate,
+            status: nextPayment.status,
+            paid_at: null,
+          }])
+          .select('*')
+          .single();
+        if (nextPaymentError || !nextPaymentData) {
+          console.error('Supabase next club_payments insert failed:', nextPaymentError);
+          alert('Ödeme kaydedildi ancak sonraki ayın aidatı oluşturulamadı.');
+        } else {
+          const normalizedNextPayment = normalizePaymentRecord(nextPaymentData);
+          nextPaymentCreated = true;
+          setClubs((prev) => prev.map((club) => club.id === currentClub?.id
+            ? { ...club, payments: [...(club.payments || []), normalizedNextPayment] }
+            : club
+          ));
+        }
+      }
+      setToastMessage(nextPaymentCreated
+        ? 'Ödeme veritabanına kaydedildi ve bir sonraki ayın aidatı oluşturuldu.'
+        : 'Ödeme veritabanına kaydedildi.');
+    } else {
+      setToastMessage('Ödeme durumu veritabanında güncellendi.');
+    }
+
+    setPaymentConfirmation(null);
+    return true;
+  };
+
+  const runPaymentStatusSave = async (paymentDetails) => {
+    if (paymentSaveLock.current) return;
+    paymentSaveLock.current = true;
+    setPaymentSaving(true);
+    try {
+      await savePaymentStatus(paymentDetails);
+    } catch (error) {
+      console.error('Payment status save crashed:', error);
+      alert('Ödeme işlemi sırasında beklenmeyen bir hata oluştu. Lütfen kayıt durumunu kontrol edin.');
+    } finally {
+      paymentSaveLock.current = false;
+      setPaymentSaving(false);
+    }
+  };
+
+  const confirmPaymentStatus = () => {
+    if (paymentSaveLock.current) return;
+    if (!paymentConfirmation?.paidAt) {
+      alert('Lütfen ödeme tarihini seçin.');
+      return;
+    }
+    void runPaymentStatusSave({ ...paymentConfirmation, status: 'Ödendi' });
   };
 
   const handleSendAnnouncement = async () => {
@@ -5120,7 +5263,11 @@ function AppClean({ initialPublicClubId = null } = {}) {
 
                       return (
                         <tr key={`${student.id}-${paymentRow.branchId}`} className={themeMode === 'light' ? 'bg-white hover:bg-slate-50' : 'bg-slate-900 hover:bg-slate-800/80'}>
-                          <td className={`px-3 py-3 ${themeMode === 'light' ? 'text-slate-800' : 'text-white'}`}>{student.name}</td>
+                          <td className={`px-3 py-3 ${themeMode === 'light' ? 'text-slate-800' : 'text-white'}`}>
+                            <button type="button" className="text-left font-medium hover:text-violet-300" onClick={() => setPaymentHistoryStudentId(student.id)}>
+                              {student.name}
+                            </button>
+                          </td>
                           <td className={`px-3 py-3 ${themeMode === 'light' ? 'text-slate-700' : 'text-slate-200'}`}>{paymentRow.branchName}</td>
                           <td className="w-36 max-w-[150px] px-3 py-3 align-top">
                             <select
@@ -5128,6 +5275,7 @@ function AppClean({ initialPublicClubId = null } = {}) {
                               value={paymentRow.status}
                               onChange={(e) => handlePaymentStatusChange(student.id, paymentRow.branchId, e.target.value)}
                               aria-label={`Ödeme durumu: ${student.name}`}
+                              disabled={paymentSaving}
                             >
                               <option value="Ödendi">Ödendi</option>
                               <option value="Bekliyor">Bekliyor</option>
@@ -5141,6 +5289,15 @@ function AppClean({ initialPublicClubId = null } = {}) {
                               <span className={`status-pill ${isPaid ? 'bg-emerald-500/15 text-emerald-300' : paymentRow.status === 'Gecikti' ? 'bg-red-500/15 text-red-300' : 'bg-amber-500/15 text-amber-300'}`}>
                                 {statusText}
                               </span>
+                              <button
+                                type="button"
+                                className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-xs font-medium text-violet-200 hover:bg-violet-500/20"
+                                onClick={() => setPaymentHistoryStudentId(student.id)}
+                                title="Öğrenci Ödeme Geçmişi"
+                                aria-label={`${student.name} ödeme geçmişi`}
+                              >
+                                Geçmiş
+                              </button>
                               {!isPaid && (
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                   <button
@@ -7522,12 +7679,89 @@ function AppClean({ initialPublicClubId = null } = {}) {
     ),
     parent: renderParentPanel(),
   };
+  const paymentHistoryStudent = (currentClub?.students || []).find((student) => student.id === paymentHistoryStudentId);
+  const paymentHistoryRows = (currentClub?.payments || [])
+    .filter((payment) => payment.studentId === paymentHistoryStudentId)
+    .sort((left, right) => String(right.dueDate ?? '').localeCompare(String(left.dueDate ?? '')));
 
   return (
     <>
       {showAttendanceSummaryModal && renderAttendanceSummaryModal()}
       {showStudentDetailModal && renderStudentDetailModal()}
       {showKvkkModal && renderKvkkModal()}
+      {paymentConfirmation && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+          <div className="card-surface w-full max-w-md rounded-3xl border border-slate-700 p-5">
+            <div className="mb-5 flex items-center justify-between">
+              <h3 className="text-xl font-semibold text-white">Ödeme Tarihini Onayla</h3>
+              <button type="button" className="text-xl text-slate-300 hover:text-white" onClick={() => setPaymentConfirmation(null)} aria-label="Kapat" disabled={paymentSaving}>×</button>
+            </div>
+            <label className="mb-5 block text-sm text-slate-300">
+              <span className="mb-2 block">Ödeme Tarihi</span>
+              <input
+                type="date"
+                className="input-shell w-full"
+                value={paymentConfirmation.paidAt}
+                onChange={(event) => setPaymentConfirmation((prev) => prev ? { ...prev, paidAt: event.target.value } : prev)}
+                required
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="secondary-btn" onClick={() => setPaymentConfirmation(null)} disabled={paymentSaving}>İptal</button>
+              <button type="button" className="primary-btn" onClick={confirmPaymentStatus} disabled={paymentSaving}>
+                {paymentSaving ? 'Kaydediliyor…' : 'Onayla'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {paymentHistoryStudentId && (
+        <div className="fixed inset-0 z-[60] flex justify-end bg-slate-950/80 backdrop-blur-sm" onClick={() => setPaymentHistoryStudentId(null)}>
+          <section
+            className={`h-full w-full max-w-2xl overflow-y-auto border-l p-5 shadow-2xl ${themeMode === 'light' ? 'border-slate-200 bg-white' : 'border-slate-700 bg-slate-950'}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payment-history-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <h3 id="payment-history-title" className="text-xl font-semibold text-white">Öğrenci Ödeme Geçmişi</h3>
+                <p className="mt-1 text-sm text-slate-400">{paymentHistoryStudent?.name || 'Öğrenci'}</p>
+              </div>
+              <button type="button" className="text-2xl text-slate-300 hover:text-white" onClick={() => setPaymentHistoryStudentId(null)} aria-label="Kapat">×</button>
+            </div>
+            {paymentHistoryRows.length ? (
+              <div className="overflow-x-auto rounded-2xl border border-slate-700">
+                <table className="min-w-full divide-y divide-slate-700 text-left text-sm text-slate-200">
+                  <thead className="bg-slate-900 text-slate-300">
+                    <tr>
+                      <th className="px-3 py-3 font-medium">Ödenen Ay</th>
+                      <th className="px-3 py-3 font-medium">Vade Tarihi</th>
+                      <th className="px-3 py-3 font-medium">Ödeme Tarihi</th>
+                      <th className="px-3 py-3 font-medium">Tutar</th>
+                      <th className="px-3 py-3 font-medium">Durum</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-700">
+                    {paymentHistoryRows.map((payment) => (
+                      <tr key={payment.id}>
+                        <td className="px-3 py-3">{payment.month || '—'}</td>
+                        <td className="px-3 py-3">{formatShortDate(payment.dueDate)}</td>
+                        <td className="px-3 py-3">{formatShortDate(payment.paidAt)}</td>
+                        <td className="px-3 py-3">{Number(payment.amount || 0).toLocaleString('tr-TR')} ₺</td>
+                        <td className="px-3 py-3">{normalizePaymentStatus(payment.status, payment.dueDate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400">Bu öğrenci için kayıtlı ödeme geçmişi bulunmuyor.</div>
+            )}
+          </section>
+        </div>
+      )}
       {whatsappEditState.open && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
           <div className="card-surface w-full max-w-xl overflow-hidden rounded-[28px] border border-slate-700">
